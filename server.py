@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 DB_PATH = os.getenv("WORLD_DB", "world.db")
 TICK_SECONDS = float(os.getenv("TICK_SECONDS", "2.0"))
-DEV_MODE = os.getenv("DEV_MODE", "1") == "1"
+DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
 DEV_TOKEN = os.getenv("DEV_TOKEN", "dev")
 EPOCH_TICKS = int(os.getenv("EPOCH_TICKS", "600"))  # contoh: 600 ticks
 REWARD_POOL_PER_EPOCH_MON = float(os.getenv("REWARD_POOL_PER_EPOCH_MON", "0.01"))  # demo
@@ -899,4 +899,5 @@ def run_one_tick():
 
         conn.commit()
     finally:
+
         conn.close()
