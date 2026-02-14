@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Rumor Engine // Terminal</title>
+  <link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="hdr">
+      <div class="brand">
+        <div class="brand__title">RUMOR ENGINE</div>
+        <div class="brand__sub">Monad Token-Gated World // Cyber Terminal</div>
+      </div>
+      <div class="status">
+        <div class="pill" id="pill-conn">CONNECTING…</div>
+        <div class="pill pill--dim" id="pill-auth">AUTH: NONE</div>
+      </div>
+    </header>
+
+    <section class="grid">
+      <div class="panel">
+        <div class="panel__title">SESSION</div>
+
+        <div class="row">
+          <label>Tx Hash (payEntry)</label>
+          <input id="txHash" placeholder="0x..." spellcheck="false" />
+          <button id="btnVerify">VERIFY ENTRY</button>
+        </div>
+		
+		<div class="row row--tight">
+			<button id="btnConnect" class="btn--wide">CONNECT WALLET</button>
+			<button id="btnSwitchMonad" class="btn--wide btn--ghost">SWITCH → MONAD TESTNET</button>
+		</div>
+		
+		<div class="row">
+			<label>Entry Contract</label>
+			<input id="entryContract" placeholder="0x..." spellcheck="false" />
+			<label>Entry Fee (MON)</label>
+			<input id="entryFeeMon" placeholder="0.001" spellcheck="false" />
+		</div>
+
+		<div class="row row--tight">
+			<button id="btnPayEntry" class="btn--wide">PAY ENTRY (ON-CHAIN)</button>
+			<button id="btnGenSessionKey" class="btn--wide btn--ghost">NEW SESSION KEY</button>
+		</div>
+
+		<div class="row">
+			<label>Session Key (bytes32)</label>
+			<input id="sessionKey" placeholder="0x..." spellcheck="false" />
+		</div>
+
+		<div class="hint">
+			Pay Entry sends <b>payEntry(agentIdHash, sessionKey)</b> to EntryGate and auto-fills tx hash for VERIFY.
+		</div>
+
+		<div class="row">
+			<label>Wallet</label>
+			<input id="walletAddr" placeholder="0x..." spellcheck="false" readonly />
+			<label>Chain</label>
+			<input id="walletChain" placeholder="chainId" spellcheck="false" readonly />
+		</div>
+
+        <div class="row">
+          <label>Bearer Token</label>
+          <input id="token" placeholder="sess_..." spellcheck="false" />
+          <button id="btnSaveToken" class="btn--ghost">SAVE</button>
+          <button id="btnClearToken" class="btn--danger">CLEAR</button>
+        </div>
+
+        <div class="row">
+          <label>Agent ID (string)</label>
+          <input id="agentId" value="agent_conspiracist" spellcheck="false" />
+        </div>
+
+        <div class="hint">
+          Tip: Verify-entry returns a session token. We store it in <b>localStorage</b>.
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__title">WORLD SUMMARY</div>
+        <div class="kv">
+          <div class="kv__k">Tick</div><div class="kv__v" id="tick">—</div>
+          <div class="kv__k">Market</div><div class="kv__v" id="market">—</div>
+          <div class="kv__k">Top Rumor</div><div class="kv__v" id="topRumor">—</div>
+        </div>
+
+        <div class="subgrid">
+          <div class="subpanel">
+            <div class="subpanel__title">AGENTS</div>
+            <div id="agents" class="mono small"></div>
+          </div>
+          <div class="subpanel">
+            <div class="subpanel__title">TOP RUMORS</div>
+            <div id="rumors" class="mono small"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel__title">ACTIONS</div>
+
+        <div class="row row--tight">
+          <button class="btn--wide" data-move="Market">MOVE → Market</button>
+          <button class="btn--wide" data-move="Mine">MOVE → Mine</button>
+          <button class="btn--wide" data-move="Lab">MOVE → Lab</button>
+          <button class="btn--wide" data-move="CouncilHall">MOVE → CouncilHall</button>
+          <button class="btn--wide" data-move="Arena">MOVE → Arena</button>
+        </div>
+
+        <div class="row">
+          <label>Spread Rumor (id)</label>
+          <input id="spreadRumorId" placeholder="r_..." spellcheck="false"/>
+          <label>Effort</label>
+          <input id="spreadEffort" value="3" spellcheck="false"/>
+          <button id="btnSpread">SPREAD</button>
+        </div>
+
+        <div class="row">
+          <label>Debunk Rumor (id)</label>
+          <input id="debunkRumorId" placeholder="r_..." spellcheck="false"/>
+          <button id="btnDebunk" class="btn--ghost">DEBUNK</button>
+        </div>
+
+        <div class="hint">
+          You can copy a rumor id from the “TOP RUMORS” panel.
+        </div>
+      </div>
+
+      <div class="panel panel--wide">
+        <div class="panel__title">LIVE EVENT LOG</div>
+        <div class="terminal" id="log"></div>
+        <div class="footer">
+          <div class="mono small">since_event_id: <span id="since">0</span> | latest_event_id: <span id="latest">—</span></div>
+          <div class="mono small">poll: 1.5s</div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.2/dist/ethers.umd.min.js"></script>
+  <script src="/web/app.js"></script>
+</body>
+</html>
