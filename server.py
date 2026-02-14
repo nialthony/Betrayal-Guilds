@@ -633,8 +633,8 @@ def submit_actions(req: SubmitActionsRequest, authorization: Optional[str] = Hea
     authed_agent = require_auth(authorization)
 
     # optional strict mode: enforce caller identity matches request agent_id
-    # if not DEV_MODE and req.agent_id != authed_agent:
-    #     raise HTTPException(status_code=403, detail="agent_id_mismatch")
+    if not DEV_MODE and req.agent_id != authed_agent:
+        raise HTTPException(status_code=403, detail="agent_id_mismatch")
 
     if len(req.actions) > 10:
         raise HTTPException(status_code=400, detail="too_many_actions_max_10")
@@ -744,7 +744,7 @@ def verify_entry(req: VerifyEntryRequest):
         if amountWei < ENTRY_FEE_WEI:
             raise HTTPException(status_code=400, detail="insufficient_fee")
 
-        agent_id = ev["agentId"].hex()      # bytes32 -> hex string (no 0x)
+        agent_id = "agent_" + ev["agentId"].hex()[:8]  # pendek & unik
         now = int(time.time())
 
         token = "sess_" + uuid.uuid4().hex
@@ -799,6 +799,39 @@ def leaderboard(epoch_index: Optional[int] = None, limit: int = 10):
                 {"agent_id": r["agent_id"], "rank": int(r["rank"]), "reward_mon": float(r["reward_mon"]), "points": int(r["points"])}
                 for r in get_rewards(conn, eidx, limit=TOP_K_REWARDS)
             ]
+        }
+    finally:
+        conn.close()
+
+@app.get("/v1/auth/whoami")
+def whoami(authorization: Optional[str] = Header(default=None)):
+    agent_id = require_auth(authorization)
+
+    if DEV_MODE:
+        return {
+            "mode": "dev",
+            "agent_id": agent_id,
+            "token_prefix": (DEV_TOKEN[:12] + "...") if DEV_TOKEN else None,
+        }
+
+    token = authorization.split(" ", 1)[1].strip()
+    conn = db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT agent_id, payer, expires_at_unix, created_at FROM sessions WHERE token=?",
+            (token,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=403, detail="invalid_session_token")
+        return {
+            "mode": "session",
+            "agent_id": row["agent_id"],
+            "payer": row["payer"],
+            "expires_at_unix": int(row["expires_at_unix"]),
+            "created_at_unix": int(row["created_at"]),
+            "now_unix": int(time.time()),
         }
     finally:
         conn.close()
