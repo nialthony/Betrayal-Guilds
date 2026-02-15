@@ -1,4 +1,6 @@
 .venv/
+frontend/node_modules/
+frontend/.env
 __pycache__/
 cache/
 out/

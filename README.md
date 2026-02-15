@@ -1,20 +1,39 @@
 # Betrayal Guilds Arena
 
-Fresh build from zero for **Gaming Agents** track.
-
-Core loop:
-- Two guilds (`alpha`, `omega`)
-- Each guild hides one traitor
-- Agents balance combat, trust, accusation, and betrayal economy
-- Match auto-resets into next round after end-state
+World-agent arena for the Gaming Agents track:
+- Guild PvP (`alpha` vs `omega`)
+- Hidden traitor per guild
+- Suspicion, trust, and betrayal economy
+- Session-authenticated agent actions
 
 ## Stack
 
-- Backend: `FastAPI` (`server.py`)
+- Backend engine: `FastAPI` (`server.py`)
 - State: SQLite (`ARENA_DB`, default `betrayal_guilds.db`)
-- Frontend: `web/index.html` + `web/app.js`
+- Frontend source: `frontend/` (Vite + React + TypeScript)
+- Wallet adapter: `wagmi` + `RainbowKit` (Monad Testnet chain config)
+- Frontend build output: `web/` (served by FastAPI)
 - Bot runner: `bots/run_all_bots.py`
 - Vercel entrypoint: `api/index.py`
+
+## Monad Wallet Setup
+
+Frontend includes Monad Testnet chain:
+- Chain ID: `10143`
+- RPC: `https://testnet-rpc.monad.xyz`
+- Explorer: `https://testnet.monadvision.com`
+
+Set WalletConnect project id in `frontend/.env`:
+
+```bash
+VITE_WALLETCONNECT_PROJECT_ID=your_project_id
+```
+
+Optional API override (for external frontend host):
+
+```bash
+VITE_API_BASE=https://your-api-host
+```
 
 ## API
 
@@ -33,34 +52,50 @@ Auth:
 Admin:
 - `POST /v1/admin/reset-world`
 
-## Local run
+## Local Development
 
-1. Install deps
+1. Install backend deps:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Run server
+2. Install frontend deps:
+
+```bash
+cd frontend
+npm install
+```
+
+3. Run backend:
 
 ```bash
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-3. Open UI
-
-`http://localhost:8000/`
-
-4. Optional bot swarm
+4. Run Vite dev server (proxy `/v1` -> backend):
 
 ```bash
-cd bots
-python run_all_bots.py
+cd frontend
+npm run dev
 ```
 
-## Environment variables
+Open `http://localhost:5173`.
 
-- `ARENA_DB` (default: `betrayal_guilds.db`, Vercel uses temp if not set)
+## Production Build (served by FastAPI)
+
+Build frontend into `web/`:
+
+```bash
+cd frontend
+npm run build
+```
+
+Then open `http://localhost:8000/`.
+
+## Environment Variables (Backend)
+
+- `ARENA_DB` (default: `betrayal_guilds.db`)
 - `SERVERLESS_MODE` (`1` on Vercel, `0` local by default)
 - `TICK_SECONDS` (default: `2.0`)
 - `MAX_TICKS_PER_REQUEST` (default: `4`)
@@ -68,13 +103,13 @@ python run_all_bots.py
 - `SESSION_TTL_SECONDS` (default: `86400`)
 - `LOCAL_AUTH_ENABLED` (default: `1`)
 - `LOCAL_AUTH_SECRET` (optional)
-- `ADMIN_RESET_SECRET` (optional; protects reset endpoint)
+- `ADMIN_RESET_SECRET` (optional)
 - `DEV_MODE` (default: `0`)
 - `DEV_TOKEN` (default: `dev`)
 
-## Vercel notes
+## Vercel Notes
 
-Project is already set for Vercel:
+Project is configured with:
 - `vercel.json`
 - `api/index.py`
 
