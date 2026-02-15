@@ -3,6 +3,7 @@ __pycache__/
 cache/
 out/
 world.db
+betrayal_guilds.db
 *.pyc
 *.pyo
 *.pyd

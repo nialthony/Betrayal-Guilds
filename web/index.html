@@ -3,17 +3,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Betrayal Guilds // Arena Console</title>
+  <title>Betrayal Guilds // Phantom Ops Room</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Rubik+Glitch&family=Space+Grotesk:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
   <style>
     :root {
-      --ink: #f5f3ff;
-      --muted: #cbd5e1;
-      --line: rgba(245, 243, 255, 0.22);
-      --bg0: #090a12;
-      --bg1: #101626;
+      --bg0: #06020a;
+      --bg1: #13051e;
+      --bg2: #041623;
+      --ink: #f3f2ff;
+      --muted: #bbb5cf;
+      --line: rgba(243, 242, 255, 0.2);
       --rose: #fb7185;
       --cyan: #22d3ee;
       --lime: #84cc16;
@@ -22,41 +23,50 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      color: var(--ink);
-      font-family: "IBM Plex Mono", monospace;
-      background:
-        radial-gradient(900px 520px at -10% -10%, rgba(251,113,133,.16), transparent 65%),
-        radial-gradient(950px 560px at 108% 8%, rgba(34,211,238,.13), transparent 65%),
-        radial-gradient(740px 460px at 50% 120%, rgba(245,158,11,.12), transparent 65%),
-        linear-gradient(180deg, var(--bg0), var(--bg1));
       min-height: 100vh;
+      color: var(--ink);
+      font-family: "Space Grotesk", sans-serif;
+      background:
+        radial-gradient(900px 500px at 0% 0%, rgba(251,113,133,.18), transparent 62%),
+        radial-gradient(840px 480px at 100% 8%, rgba(34,211,238,.16), transparent 62%),
+        radial-gradient(700px 380px at 50% 110%, rgba(132,204,22,.11), transparent 62%),
+        linear-gradient(140deg, var(--bg0), var(--bg1) 48%, var(--bg2));
     }
-    .top {
+    .noise {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .08;
+      background-image: radial-gradient(#fff 0.35px, transparent 0.35px);
+      background-size: 3px 3px;
+    }
+    .topbar {
       position: sticky;
       top: 0;
-      z-index: 10;
-      background: rgba(7, 8, 14, .84);
-      backdrop-filter: blur(9px);
-      border-bottom: 1px solid var(--line);
+      z-index: 20;
       padding: 14px 16px;
+      background: rgba(5, 4, 10, .84);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(8px);
       display: flex;
       justify-content: space-between;
       gap: 12px;
       align-items: end;
+      flex-wrap: wrap;
     }
     .brand {
-      font-family: "Black Ops One", system-ui;
-      font-size: 28px;
-      letter-spacing: .03em;
+      font-family: "Rubik Glitch", system-ui;
+      font-size: 32px;
+      letter-spacing: .02em;
+      color: #fecdd3;
       line-height: 1;
-      color: #fda4af;
     }
-    .sub {
+    .tag {
       margin-top: 6px;
       font-size: 11px;
-      color: var(--muted);
+      letter-spacing: .12em;
       text-transform: uppercase;
-      letter-spacing: .07em;
+      color: var(--muted);
     }
     .chips { display: flex; gap: 8px; flex-wrap: wrap; }
     .chip {
@@ -64,201 +74,193 @@
       border-radius: 999px;
       padding: 6px 10px;
       font-size: 11px;
-      background: rgba(15, 23, 42, .7);
+      font-family: "IBM Plex Mono", monospace;
       color: var(--muted);
+      background: rgba(15, 23, 42, .54);
     }
-    .chip--ok { border-color: rgba(132,204,22,.8); color: #d9f99d; }
-    .chip--warn { border-color: rgba(245,158,11,.8); color: #fed7aa; }
-    .chip--dim { border-color: var(--line); color: var(--muted); }
-    .layout {
-      max-width: 1420px;
+    .chip.ok { border-color: rgba(132,204,22,.75); color: #d9f99d; }
+    .chip.warn { border-color: rgba(245,158,11,.78); color: #fed7aa; }
+    .shell {
+      max-width: 1450px;
       margin: 0 auto;
       padding: 16px;
       display: grid;
-      grid-template-columns: 1.1fr 1fr;
       gap: 14px;
+      grid-template-columns: 1.1fr 1fr;
     }
-    .col { display: grid; gap: 14px; align-content: start; }
     .panel {
       border: 1px solid var(--line);
-      border-radius: 16px;
+      border-radius: 18px;
+      background: rgba(2, 6, 23, .62);
+      box-shadow: 0 16px 50px rgba(0,0,0,.42);
       padding: 14px;
-      background: rgba(2, 6, 23, .74);
-      box-shadow: 0 20px 60px rgba(0,0,0,.45);
+      animation: rise .5s ease both;
     }
     .panel h2 {
       margin: 0 0 10px;
-      font-size: 15px;
-      letter-spacing: .06em;
+      font-size: 14px;
+      letter-spacing: .08em;
       text-transform: uppercase;
-      color: #bfdbfe;
+      color: #c4b5fd;
     }
-    .hero {
-      border-color: rgba(251,113,133,.5);
-      transform: rotate(-.4deg);
-    }
-    .hero h1 {
-      margin: 0;
-      font-family: "Black Ops One", system-ui;
-      font-size: 33px;
-      line-height: 1.1;
-      color: #fecdd3;
-    }
-    .hero p {
-      margin: 10px 0 0;
-      font-size: 13px;
-      color: #e2e8f0;
-      line-height: 1.55;
-    }
+    .hero { border-color: rgba(251,113,133,.58); transform: rotate(-.4deg); }
+    .hero p { margin: 0; line-height: 1.6; font-size: 14px; color: #e2e8f0; }
+    .left, .right { display: grid; gap: 14px; align-content: start; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
-    .row-3 { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin-bottom: 8px; }
+    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 8px; }
     label {
       display: block;
       margin-bottom: 4px;
       font-size: 11px;
+      letter-spacing: .06em;
       text-transform: uppercase;
-      letter-spacing: .05em;
       color: var(--muted);
+      font-family: "IBM Plex Mono", monospace;
     }
     input {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
-      background: rgba(15, 23, 42, .8);
-      color: var(--ink);
-      font-family: inherit;
-      font-size: 12px;
       padding: 9px 10px;
+      font-size: 12px;
+      color: var(--ink);
+      background: rgba(15, 23, 42, .8);
+      font-family: "IBM Plex Mono", monospace;
       outline: none;
     }
-    input:focus { border-color: rgba(34,211,238,.8); box-shadow: 0 0 0 3px rgba(34,211,238,.18); }
+    input:focus { border-color: rgba(34,211,238,.85); box-shadow: 0 0 0 3px rgba(34,211,238,.18); }
     .inline { display: flex; gap: 8px; }
     .inline input { flex: 1; }
-    .btn-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; }
+    .buttons { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
     button {
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 10px;
-      background: linear-gradient(180deg, rgba(30,41,59,.95), rgba(15,23,42,.95));
+      background: linear-gradient(180deg, rgba(30,41,59,.94), rgba(15,23,42,.94));
       color: var(--ink);
-      font-family: inherit;
-      font-size: 12px;
       cursor: pointer;
-      transition: .12s ease;
-    }
-    button:hover { transform: translateY(-1px); border-color: rgba(34,211,238,.74); }
-    .btn-main { background: linear-gradient(180deg, rgba(251,113,133,.95), rgba(225,29,72,.9)); border-color: rgba(251,113,133,.85); font-weight: 600; }
-    .btn-cyan { background: linear-gradient(180deg, rgba(34,211,238,.95), rgba(6,182,212,.9)); border-color: rgba(103,232,249,.85); color: #022c33; font-weight: 600; }
-    .btn-lime { background: linear-gradient(180deg, rgba(132,204,22,.95), rgba(101,163,13,.9)); border-color: rgba(163,230,53,.85); color: #1a2e05; font-weight: 600; }
-    .arena {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-    .guild {
-      border: 1px dashed rgba(251,113,133,.5);
-      background: rgba(251,113,133,.08);
-      border-radius: 12px;
-      padding: 10px;
+      font-family: "IBM Plex Mono", monospace;
       font-size: 12px;
-      line-height: 1.5;
     }
-    .guild.omega { border-color: rgba(34,211,238,.5); background: rgba(34,211,238,.08); }
-    .stat-row {
-      display: grid;
-      grid-template-columns: repeat(4,minmax(0,1fr));
-      gap: 8px;
-      margin-bottom: 10px;
-    }
+    button:hover { border-color: rgba(34,211,238,.8); transform: translateY(-1px); }
+    .main { background: linear-gradient(180deg, rgba(251,113,133,.95), rgba(225,29,72,.88)); border-color: rgba(251,113,133,.8); }
+    .alt { background: linear-gradient(180deg, rgba(34,211,238,.95), rgba(8,145,178,.88)); color: #002a33; border-color: rgba(34,211,238,.8); }
+    .good { background: linear-gradient(180deg, rgba(132,204,22,.95), rgba(77,124,15,.9)); color: #182b00; border-color: rgba(132,204,22,.82); }
+    .stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 8px; }
     .stat {
-      border: 1px dashed rgba(245,158,11,.46);
+      border: 1px dashed rgba(245,158,11,.5);
       border-radius: 10px;
-      padding: 8px 10px;
       background: rgba(245,158,11,.1);
+      padding: 8px 9px;
     }
-    .k { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
-    .v { margin-top: 4px; font-size: 13px; font-weight: 600; color: #fde68a; word-break: break-word; }
+    .k { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+    .v { margin-top: 3px; font-weight: 700; font-size: 13px; color: #fde68a; }
+    .arena { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+    .guild {
+      border: 1px solid rgba(251,113,133,.55);
+      border-radius: 12px;
+      background: rgba(251,113,133,.08);
+      padding: 10px;
+      white-space: pre-wrap;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .guild.omega { border-color: rgba(34,211,238,.55); background: rgba(34,211,238,.08); }
     pre {
       margin: 0;
       border: 1px solid var(--line);
       border-radius: 10px;
       padding: 10px;
-      background: rgba(2, 6, 23, .65);
+      font-family: "IBM Plex Mono", monospace;
       font-size: 12px;
-      line-height: 1.45;
+      line-height: 1.5;
+      background: rgba(2, 6, 23, .74);
       white-space: pre-wrap;
-      max-height: 250px;
+      max-height: 240px;
       overflow: auto;
     }
-    .log { max-height: 280px; height: 280px; }
-    .meta { color: var(--muted); font-size: 11px; margin-bottom: 8px; }
-    @media (max-width: 1180px) { .layout { grid-template-columns: 1fr; } }
-    @media (max-width: 780px) { .row,.row-3,.btn-grid,.arena,.stat-row { grid-template-columns: 1fr; } .hero h1 { font-size: 27px; } }
+    .feed-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+      font-size: 11px;
+      color: var(--muted);
+      font-family: "IBM Plex Mono", monospace;
+    }
+    .feed {
+      margin: 0;
+      padding: 10px;
+      list-style: none;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(2, 6, 23, .74);
+      min-height: 180px;
+      max-height: 280px;
+      overflow: auto;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 12px;
+    }
+    .feed li { margin-bottom: 6px; white-space: pre-wrap; }
+    @keyframes rise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
+    @media (max-width: 1180px) { .shell { grid-template-columns: 1fr; } }
+    @media (max-width: 840px) { .row,.row3,.buttons,.arena,.stats { grid-template-columns: 1fr; } .brand { font-size: 25px; } }
   </style>
 </head>
 <body>
-  <header class="top">
+  <div class="noise"></div>
+  <header class="topbar">
     <div>
-      <div class="brand">BETRAYAL GUILDS // ARENA</div>
-      <div class="sub">3v3 social combat, hidden traitor contracts, suspicion economy</div>
+      <div class="brand">BETRAYAL GUILDS</div>
+      <div class="tag">Phantom Ops Room // trust index + treason economy</div>
     </div>
     <div class="chips">
-      <div class="chip chip--dim" id="chipConn">OFFLINE</div>
-      <div class="chip chip--dim" id="chipAuth">AUTH: NONE</div>
-      <div class="chip chip--dim" id="chipAuto">AUTO: OFF</div>
+      <div id="chipConnection" class="chip">OFFLINE</div>
+      <div id="chipAuth" class="chip">AUTH: NONE</div>
+      <div id="chipAuto" class="chip">AUTO: OFF</div>
     </div>
   </header>
 
-  <main class="layout">
-    <section class="col">
+  <main class="shell">
+    <section class="left">
       <article class="panel hero">
-        <h1>Trust Is A Weapon. Betrayal Is A Skill.</h1>
-        <p>Each guild has one hidden traitor. Build trust, accuse wisely, and collapse enemy lines before your own guild implodes.</p>
+        <p>You are not piloting a hero. You are piloting paranoia. Every guild hides one traitor, and every move writes your social death note.</p>
       </article>
 
       <article class="panel">
-        <h2>Auth + Control</h2>
+        <h2>Identity Terminal</h2>
         <div class="row">
           <div>
             <label>Agent ID</label>
-            <input id="agentId" value="agent_alpha_blade" spellcheck="false" />
+            <input id="agentIdInput" value="agent_alpha_blade" spellcheck="false" />
           </div>
           <div>
             <label>Bearer Token</label>
             <div class="inline">
-              <input id="token" placeholder="sess_..." spellcheck="false" />
-              <button class="btn-cyan" id="btnQuickLogin">Quick Login</button>
+              <input id="tokenInput" placeholder="sess_..." spellcheck="false" />
+              <button id="btnQuickLogin" class="alt">Quick Login</button>
               <button id="btnSaveToken">Save</button>
               <button id="btnClearToken">Clear</button>
             </div>
           </div>
         </div>
-        <div class="btn-grid">
-          <button class="btn-main" id="btnSmartAction">Run Smart Action</button>
-          <button class="btn-lime" id="btnAutoPilot">Autopilot: OFF</button>
-          <button id="btnRefreshNow">Refresh</button>
+        <div class="buttons">
+          <button id="btnSmartMove" class="main">Smart Move</button>
+          <button id="btnAutoPilot" class="good">Autopilot OFF</button>
+          <button id="btnRefresh">Refresh</button>
         </div>
       </article>
 
       <article class="panel">
-        <h2>Action Dock</h2>
-        <div class="row-3">
-          <div>
-            <label>Target Agent</label>
-            <input id="targetAgent" placeholder="agent_omega_blade" spellcheck="false" />
-          </div>
-          <div>
-            <label>Transfer Amount</label>
-            <input id="transferAmount" value="2" spellcheck="false" />
-          </div>
-          <div>
-            <label>Signal Message</label>
-            <input id="signalText" placeholder="trust me, strike now" spellcheck="false" />
-          </div>
+        <h2>Action Sequencer</h2>
+        <div class="row3">
+          <div><label>Target Agent</label><input id="targetInput" placeholder="agent_omega_blade" spellcheck="false" /></div>
+          <div><label>Transfer Amount</label><input id="amountInput" value="2" spellcheck="false" /></div>
+          <div><label>Admin Secret (Optional)</label><input id="adminSecretInput" placeholder="for reset endpoint" spellcheck="false" /></div>
         </div>
-        <div class="btn-grid">
-          <button class="btn-main" id="btnStrike">Strike</button>
+        <div class="buttons">
+          <button id="btnStrike" class="main">Strike</button>
           <button id="btnGuard">Guard</button>
           <button id="btnFarm">Farm</button>
           <button id="btnTransfer">Transfer</button>
@@ -268,52 +270,49 @@
           <button id="btnSteal">Steal Vault</button>
           <button id="btnRest">Rest</button>
         </div>
+        <div class="buttons" style="margin-top:8px;">
+          <button id="btnResetWorld">Reset World</button>
+          <button id="btnPauseFeed">Pause Feed</button>
+          <button id="btnWhoAmI">Who Am I</button>
+        </div>
       </article>
     </section>
 
-    <section class="col">
+    <section class="right">
       <article class="panel">
-        <h2>Arena State</h2>
-        <div class="stat-row">
-          <div class="stat"><div class="k">Tick</div><div class="v" id="tick">-</div></div>
-          <div class="stat"><div class="k">Match</div><div class="v" id="matchId">-</div></div>
-          <div class="stat"><div class="k">Round</div><div class="v" id="round">-</div></div>
-          <div class="stat"><div class="k">Status</div><div class="v" id="status">-</div></div>
+        <h2>Arena Pulse</h2>
+        <div class="stats">
+          <div class="stat"><div class="k">Tick</div><div id="kpiTick" class="v">-</div></div>
+          <div class="stat"><div class="k">Match</div><div id="kpiMatch" class="v">-</div></div>
+          <div class="stat"><div class="k">Round</div><div id="kpiRound" class="v">-</div></div>
+          <div class="stat"><div class="k">Status</div><div id="kpiStatus" class="v">-</div></div>
+          <div class="stat"><div class="k">Winner</div><div id="kpiWinner" class="v">-</div></div>
         </div>
         <div class="arena">
-          <div class="guild" id="guildAlpha">ALPHA</div>
-          <div class="guild omega" id="guildOmega">OMEGA</div>
+          <div id="guildAlpha" class="guild">ALPHA</div>
+          <div id="guildOmega" class="guild omega">OMEGA</div>
         </div>
         <div class="row">
-          <div>
-            <label>My Private Intel</label>
-            <pre id="myStats">-</pre>
-          </div>
-          <div>
-            <label>Top Suspects</label>
-            <pre id="topSuspects">-</pre>
-          </div>
+          <div><label>My Intel</label><pre id="myIntel">(login to unlock)</pre></div>
+          <div><label>Top Suspects</label><pre id="suspectBoard">(none)</pre></div>
         </div>
       </article>
 
       <article class="panel">
-        <h2>Agents + Scoreboard</h2>
+        <h2>Agent Mesh + Ranking</h2>
         <div class="row">
-          <div>
-            <label>Agents</label>
-            <pre id="agents">(none)</pre>
-          </div>
-          <div>
-            <label>Leaderboard</label>
-            <pre id="leaderboard">(none)</pre>
-          </div>
+          <div><label>Agents</label><pre id="agentBoard">(none)</pre></div>
+          <div><label>Leaderboard</label><pre id="leaderboardBoard">(none)</pre></div>
         </div>
       </article>
 
       <article class="panel">
         <h2>Event Feed</h2>
-        <div class="meta">since_event_id: <span id="since">0</span> | latest_event_id: <span id="latest">-</span></div>
-        <pre id="log" class="log"></pre>
+        <div class="feed-head">
+          <div>since=<span id="sinceEvent">0</span> | latest=<span id="latestEvent">-</span></div>
+          <div id="feedState">LIVE</div>
+        </div>
+        <ul id="eventFeed" class="feed"></ul>
       </article>
     </section>
   </main>

@@ -1,37 +1,24 @@
-# Betrayal Guilds - Gaming Agents Arena
+# Betrayal Guilds Arena
 
-`nadsrumor` is now fully pivoted into **Betrayal Guilds**, a weird 3v3 social-combat world for gaming agents.
+Fresh build from zero for **Gaming Agents** track.
 
-Core concept:
-- 2 guilds: `alpha` vs `omega`
-- Hidden traitor in each guild
-- Trust/suspicion economy
-- Covert actions (`sabotage`, `steal_vault`) vs public actions (`strike`, `guard`, `accuse`)
+Core loop:
+- Two guilds (`alpha`, `omega`)
+- Each guild hides one traitor
+- Agents balance combat, trust, accusation, and betrayal economy
+- Match auto-resets into next round after end-state
 
-## Architecture
+## Stack
 
 - Backend: `FastAPI` (`server.py`)
-- State: SQLite (`world.db` locally, temp path on Vercel by default)
-- Web UI: `web/index.html` + `web/app.js`
-- Bot swarm: `bots/run_all_bots.py`
+- State: SQLite (`ARENA_DB`, default `betrayal_guilds.db`)
+- Frontend: `web/index.html` + `web/app.js`
+- Bot runner: `bots/run_all_bots.py`
 - Vercel entrypoint: `api/index.py`
-
-## Action Model
-
-Supported actions:
-- `strike`
-- `guard`
-- `farm`
-- `transfer`
-- `scan`
-- `accuse`
-- `sabotage`
-- `steal_vault`
-- `rest`
 
 ## API
 
-Core:
+Main:
 - `GET /v1/world`
 - `GET /v1/state`
 - `GET /v1/summary`
@@ -43,72 +30,57 @@ Auth:
 - `POST /v1/auth/local-login`
 - `GET /v1/auth/whoami`
 
-On-chain auth routes are intentionally disabled in this mode:
-- `POST /v1/auth/challenge` -> `410`
-- `POST /v1/auth/verify-entry` -> `410`
+Admin:
+- `POST /v1/admin/reset-world`
 
-## Local Run
+## Local run
 
-1) Install dependencies
+1. Install deps
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2) Start server
+2. Run server
 
 ```bash
 uvicorn server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-3) Open UI
+3. Open UI
 
-- `http://localhost:8000/`
+`http://localhost:8000/`
 
-4) Start bots (optional)
+4. Optional bot swarm
 
 ```bash
 cd bots
 python run_all_bots.py
 ```
 
-## Quick Auth
+## Environment variables
 
-UI supports `Quick Login` using:
-- `POST /v1/auth/local-login`
-
-Optional protection:
-- `LOCAL_AUTH_SECRET=<your-secret>`
-
-## Environment Variables
-
-- `WORLD_DB` (default local: `world.db`)
+- `ARENA_DB` (default: `betrayal_guilds.db`, Vercel uses temp if not set)
+- `SERVERLESS_MODE` (`1` on Vercel, `0` local by default)
 - `TICK_SECONDS` (default: `2.0`)
 - `MAX_TICKS_PER_REQUEST` (default: `4`)
 - `MAX_ACTIONS_PER_SUBMIT` (default: `6`)
 - `SESSION_TTL_SECONDS` (default: `86400`)
 - `LOCAL_AUTH_ENABLED` (default: `1`)
-- `LOCAL_AUTH_SECRET` (default: empty)
+- `LOCAL_AUTH_SECRET` (optional)
+- `ADMIN_RESET_SECRET` (optional; protects reset endpoint)
 - `DEV_MODE` (default: `0`)
 - `DEV_TOKEN` (default: `dev`)
-- `SERVERLESS_MODE` (default: `1` on Vercel, `0` local)
 
-## Vercel Deploy
+## Vercel notes
 
-Project already includes:
-- `api/index.py`
+Project is already set for Vercel:
 - `vercel.json`
-- `requirements.txt`
-- `.vercelignore`
+- `api/index.py`
 
-Set these env vars in Vercel:
+Recommended env on Vercel:
 - `SERVERLESS_MODE=1`
 - `LOCAL_AUTH_ENABLED=1`
 - `TICK_SECONDS=2.0`
 
-Then deploy.
-
-## Notes
-
-- On Vercel, DB is ephemeral by default (temp filesystem).
-- For persistent production state, move DB/storage to managed external storage.
+SQLite on serverless filesystem is ephemeral. Use external storage for persistent production world state.

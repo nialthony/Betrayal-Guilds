@@ -7,7 +7,7 @@ import tempfile
 import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -19,19 +19,35 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
 IS_VERCEL = (os.getenv("VERCEL", "").lower() in ("1", "true", "yes")) or bool(os.getenv("VERCEL_ENV"))
 SERVERLESS_MODE = os.getenv("SERVERLESS_MODE", "1" if IS_VERCEL else "0") == "1"
-DB_PATH = os.getenv("WORLD_DB", os.path.join(tempfile.gettempdir(), "betrayal_guilds.db") if IS_VERCEL else "world.db")
+DB_PATH = os.getenv(
+    "ARENA_DB",
+    os.path.join(tempfile.gettempdir(), "betrayal_guilds.db") if IS_VERCEL else "betrayal_guilds.db",
+)
 
 TICK_SECONDS = float(os.getenv("TICK_SECONDS", "2.0"))
 MAX_TICKS_PER_REQUEST = int(os.getenv("MAX_TICKS_PER_REQUEST", "4"))
 MAX_ACTIONS_PER_SUBMIT = int(os.getenv("MAX_ACTIONS_PER_SUBMIT", "6"))
-DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
-DEV_TOKEN = os.getenv("DEV_TOKEN", "dev")
-LOCAL_AUTH_ENABLED = os.getenv("LOCAL_AUTH_ENABLED", "1") == "1"
-LOCAL_AUTH_SECRET = os.getenv("LOCAL_AUTH_SECRET", "")
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "86400"))
 
-GUILDS = ("alpha", "omega")
-ROLE_POOL = ("Vanguard", "Warden", "Broker", "Oracle")
+LOCAL_AUTH_ENABLED = os.getenv("LOCAL_AUTH_ENABLED", "1") == "1"
+LOCAL_AUTH_SECRET = os.getenv("LOCAL_AUTH_SECRET", "")
+ADMIN_RESET_SECRET = os.getenv("ADMIN_RESET_SECRET", "")
+DEV_MODE = os.getenv("DEV_MODE", "0") == "1"
+DEV_TOKEN = os.getenv("DEV_TOKEN", "dev")
+
+GUILDS: Tuple[str, str] = ("alpha", "omega")
+ROLE_POOL: Tuple[str, ...] = ("Vanguard", "Warden", "Broker", "Oracle")
+SUPPORTED_ACTIONS: Tuple[str, ...] = (
+    "strike",
+    "guard",
+    "farm",
+    "transfer",
+    "scan",
+    "accuse",
+    "sabotage",
+    "steal_vault",
+    "rest",
+)
 DEFAULT_AGENT_IDS = [
     "agent_alpha_blade",
     "agent_alpha_shield",
@@ -40,6 +56,12 @@ DEFAULT_AGENT_IDS = [
     "agent_omega_shield",
     "agent_omega_broker",
 ]
+
+TABLE_META = "bg_meta"
+TABLE_EVENTS = "bg_events"
+TABLE_ACTIONS = "bg_actions"
+TABLE_SESSIONS = "bg_sessions"
+
 TICK_LOCK = threading.Lock()
 
 
@@ -49,22 +71,8 @@ class LocalLoginRequest(BaseModel):
     secret: Optional[str] = None
 
 
-class VerifyEntryRequest(BaseModel):
-    tx_hash: str
-
-
-class VerifyEntryResponse(BaseModel):
+class LocalLoginResponse(BaseModel):
     access_token: str
-    expires_at_unix: int
-
-
-class AuthChallengeRequest(BaseModel):
-    payer: str
-
-
-class AuthChallengeResponse(BaseModel):
-    challenge_id: str
-    message: str
     expires_at_unix: int
 
 
@@ -74,18 +82,25 @@ class SubmitActionsRequest(BaseModel):
     actions: List[Dict[str, Any]] = Field(default_factory=list)
 
 
-def clamp(v: float, lo: float, hi: float) -> float:
-    return lo if v < lo else hi if v > hi else v
+def clamp(value: float, lo: float, hi: float) -> float:
+    if value < lo:
+        return lo
+    if value > hi:
+        return hi
+    return value
 
 
-def h(seed: str, lo: int, hi: int) -> int:
-    raw = hashlib.sha256(seed.encode("utf-8")).hexdigest()
+def seeded_int(seed: str, lo: int, hi: int) -> int:
     if hi <= lo:
         return lo
+    raw = hashlib.sha256(seed.encode("utf-8")).hexdigest()
     return lo + (int(raw[:8], 16) % (hi - lo + 1))
 
 
 def db() -> sqlite3.Connection:
+    dirname = os.path.dirname(DB_PATH)
+    if dirname:
+        os.makedirs(dirname, exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
@@ -94,36 +109,38 @@ def db() -> sqlite3.Connection:
 def set_meta(conn: sqlite3.Connection, key: str, value: str):
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        f"INSERT INTO {TABLE_META}(key,value) VALUES(?,?) "
+        f"ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         (key, value),
     )
 
 
 def get_meta(conn: sqlite3.Connection, key: str, default: str) -> str:
     cur = conn.cursor()
-    cur.execute("SELECT value FROM meta WHERE key=?", (key,))
+    cur.execute(f"SELECT value FROM {TABLE_META} WHERE key=?", (key,))
     row = cur.fetchone()
     return default if row is None else str(row["value"])
 
 
-def guild_of(agent_id: str) -> str:
+def guild_for_agent(agent_id: str) -> str:
     low = (agent_id or "").lower()
-    if "omega" in low:
-        return "omega"
     if "alpha" in low:
         return "alpha"
-    return "alpha" if h(f"g:{agent_id}", 0, 1) == 0 else "omega"
+    if "omega" in low:
+        return "omega"
+    return "alpha" if seeded_int(f"guild:{agent_id}", 0, 1) == 0 else "omega"
 
 
-def role_of(agent_id: str) -> str:
-    return ROLE_POOL[h(f"r:{agent_id}", 0, len(ROLE_POOL) - 1)]
+def role_for_agent(agent_id: str) -> str:
+    idx = seeded_int(f"role:{agent_id}", 0, len(ROLE_POOL) - 1)
+    return ROLE_POOL[idx]
 
 
-def mk_agent(agent_id: str) -> Dict[str, Any]:
+def new_agent(agent_id: str) -> Dict[str, Any]:
     return {
         "agent_id": agent_id,
-        "guild": guild_of(agent_id),
-        "role": role_of(agent_id),
+        "guild": guild_for_agent(agent_id),
+        "role": role_for_agent(agent_id),
         "alive": True,
         "hp": 16,
         "energy": 8,
@@ -138,9 +155,22 @@ def mk_agent(agent_id: str) -> Dict[str, Any]:
     }
 
 
+def assign_traitors(state: Dict[str, Any]):
+    match_id = int(state["match"]["id"])
+    for guild in GUILDS:
+        members = sorted([aid for aid, row in state["agents"].items() if row["guild"] == guild])
+        if not members:
+            continue
+        pick = members[seeded_int(f"traitor:{match_id}:{guild}", 0, len(members) - 1)]
+        for aid in members:
+            row = state["agents"][aid]
+            row["secret_alignment"] = "traitor" if aid == pick else "loyal"
+            row["revealed"] = False
+
+
 def default_state() -> Dict[str, Any]:
-    agents = {aid: mk_agent(aid) for aid in DEFAULT_AGENT_IDS}
-    s = {
+    agents = {aid: new_agent(aid) for aid in DEFAULT_AGENT_IDS}
+    state = {
         "tick": 0,
         "match": {"id": 1, "round": 1, "max_rounds": 18, "status": "active", "winner": None, "ended_at": None},
         "guilds": {
@@ -150,31 +180,24 @@ def default_state() -> Dict[str, Any]:
         "agents": agents,
         "points": {aid: 0 for aid in agents},
     }
-    assign_traitors(s)
-    return s
-
-
-def assign_traitors(state: Dict[str, Any]):
-    mid = int(state["match"]["id"])
-    for g in GUILDS:
-        members = sorted([aid for aid, a in state["agents"].items() if a["guild"] == g])
-        if not members:
-            continue
-        t = members[h(f"{mid}:{g}:traitor", 0, len(members) - 1)]
-        for aid in members:
-            a = state["agents"][aid]
-            a["secret_alignment"] = "traitor" if aid == t else "loyal"
-            a["revealed"] = False
+    assign_traitors(state)
+    return state
 
 
 def ensure_agent(state: Dict[str, Any], agent_id: str):
-    if agent_id not in state["agents"]:
-        state["agents"][agent_id] = mk_agent(agent_id)
-        state["points"][agent_id] = 0
+    if agent_id in state["agents"]:
+        return
+    state["agents"][agent_id] = new_agent(agent_id)
+    state["points"][agent_id] = 0
 
 
 def load_state(conn: sqlite3.Connection) -> Dict[str, Any]:
-    return json.loads(get_meta(conn, "state", json.dumps(default_state())))
+    text = get_meta(conn, "state", "")
+    if not text:
+        state = default_state()
+        set_meta(conn, "state", json.dumps(state))
+        return state
+    return json.loads(text)
 
 
 def save_state(conn: sqlite3.Connection, state: Dict[str, Any]):
@@ -183,29 +206,48 @@ def save_state(conn: sqlite3.Connection, state: Dict[str, Any]):
 
 def init_db():
     conn = db()
-    cur = conn.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS events (event_id INTEGER PRIMARY KEY AUTOINCREMENT, tick INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL)"
-    )
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS actions (action_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, tick_submitted INTEGER NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, error TEXT, created_at INTEGER NOT NULL)"
-    )
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, agent_id TEXT NOT NULL, payer TEXT NOT NULL, expires_at_unix INTEGER NOT NULL, created_at INTEGER NOT NULL)"
-    )
-    if get_meta(conn, "state", "") == "":
-        save_state(conn, default_state())
-    if get_meta(conn, "last_tick_unix", "") == "":
-        set_meta(conn, "last_tick_unix", str(int(time.time())))
-    conn.commit()
-    conn.close()
+    try:
+        cur = conn.cursor()
+        cur.execute(f"CREATE TABLE IF NOT EXISTS {TABLE_META} (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        cur.execute(
+            f"CREATE TABLE IF NOT EXISTS {TABLE_EVENTS} ("
+            "event_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "tick INTEGER NOT NULL,"
+            "type TEXT NOT NULL,"
+            "payload TEXT NOT NULL,"
+            "created_at INTEGER NOT NULL)"
+        )
+        cur.execute(
+            f"CREATE TABLE IF NOT EXISTS {TABLE_ACTIONS} ("
+            "action_id TEXT PRIMARY KEY,"
+            "agent_id TEXT NOT NULL,"
+            "tick_submitted INTEGER NOT NULL,"
+            "payload TEXT NOT NULL,"
+            "status TEXT NOT NULL,"
+            "error TEXT,"
+            "created_at INTEGER NOT NULL)"
+        )
+        cur.execute(
+            f"CREATE TABLE IF NOT EXISTS {TABLE_SESSIONS} ("
+            "token TEXT PRIMARY KEY,"
+            "agent_id TEXT NOT NULL,"
+            "payer TEXT NOT NULL,"
+            "expires_at_unix INTEGER NOT NULL,"
+            "created_at INTEGER NOT NULL)"
+        )
+        if get_meta(conn, "state", "") == "":
+            set_meta(conn, "state", json.dumps(default_state()))
+        if get_meta(conn, "last_tick_unix", "") == "":
+            set_meta(conn, "last_tick_unix", str(int(time.time())))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def insert_event(conn: sqlite3.Connection, tick: int, etype: str, payload: Dict[str, Any]):
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO events(tick,type,payload,created_at) VALUES(?,?,?,?)",
+        f"INSERT INTO {TABLE_EVENTS}(tick,type,payload,created_at) VALUES(?,?,?,?)",
         (int(tick), etype, json.dumps(payload), int(time.time())),
     )
 
@@ -213,25 +255,71 @@ def insert_event(conn: sqlite3.Connection, tick: int, etype: str, payload: Dict[
 def queue_action(conn: sqlite3.Connection, action_id: str, agent_id: str, tick_submitted: int, payload: Dict[str, Any]):
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO actions(action_id,agent_id,tick_submitted,payload,status,error,created_at) VALUES(?,?,?,?,?,?,?)",
+        f"INSERT INTO {TABLE_ACTIONS}(action_id,agent_id,tick_submitted,payload,status,error,created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
         (action_id, agent_id, int(tick_submitted), json.dumps(payload), "queued", None, int(time.time())),
     )
 
 
-def require_auth(auth: Optional[str]) -> str:
-    if not auth:
+def reset_world(conn: sqlite3.Connection):
+    cur = conn.cursor()
+    cur.execute(f"DELETE FROM {TABLE_EVENTS}")
+    cur.execute(f"DELETE FROM {TABLE_ACTIONS}")
+    set_meta(conn, "state", json.dumps(default_state()))
+    set_meta(conn, "last_tick_unix", str(int(time.time())))
+
+
+def project_agent(agent_id: str, row: Dict[str, Any], viewer: Optional[str]) -> Dict[str, Any]:
+    out = {
+        "agent_id": agent_id,
+        "guild": row["guild"],
+        "role": row["role"],
+        "alive": bool(row["alive"]),
+        "hp": int(row["hp"]),
+        "energy": int(row["energy"]),
+        "credits": int(row["credits"]),
+        "suspicion": round(float(row["suspicion"]), 3),
+        "trust": round(float(row["trust"]), 3),
+        "revealed": bool(row["revealed"]),
+        "revealed_alignment": row["secret_alignment"] if row["revealed"] else None,
+        "last_action": row.get("last_action", "-"),
+    }
+    if viewer == agent_id:
+        out["is_you"] = True
+    return out
+
+
+def private_contract(agent: Dict[str, Any]) -> Dict[str, Any]:
+    if agent["secret_alignment"] == "traitor":
+        current = int(agent["stats"]["vault_stolen"]) + int(agent["stats"]["self_inflicted"])
+        return {
+            "text": "cause chaos and siphon value",
+            "current": current,
+            "target": 25,
+            "percent": int(clamp((current / 25) * 100, 0, 100)),
+        }
+    return {"text": "help your guild win", "current": 0, "target": 1, "percent": 0}
+
+
+def auth_agent(authorization: Optional[str]) -> str:
+    if not authorization:
         raise HTTPException(status_code=401, detail="missing_authorization")
-    if not auth.lower().startswith("bearer "):
+    if not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="invalid_authorization")
-    token = auth.split(" ", 1)[1].strip()
+
+    token = authorization.split(" ", 1)[1].strip()
     if DEV_MODE:
         if token != DEV_TOKEN:
             raise HTTPException(status_code=403, detail="bad_token")
         return "dev_agent"
+
     conn = db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT agent_id,expires_at_unix FROM sessions WHERE token=?", (token,))
+        cur.execute(
+            f"SELECT agent_id,expires_at_unix FROM {TABLE_SESSIONS} WHERE token=?",
+            (token,),
+        )
         row = cur.fetchone()
         if row is None:
             raise HTTPException(status_code=403, detail="invalid_session_token")
@@ -242,167 +330,222 @@ def require_auth(auth: Optional[str]) -> str:
         conn.close()
 
 
-def soft_agent(auth: Optional[str]) -> Optional[str]:
+def soft_auth_agent(authorization: Optional[str]) -> Optional[str]:
     try:
-        return require_auth(auth)
+        return auth_agent(authorization)
     except Exception:
         return None
 
 
-def progress_for(a: Dict[str, Any]) -> Dict[str, Any]:
-    if a["secret_alignment"] == "traitor":
-        current = int(a["stats"]["vault_stolen"]) + int(a["stats"]["self_inflicted"])
-        return {"text": "cause chaos and siphon value", "current": current, "target": 25, "percent": int(clamp(current / 25 * 100, 0, 100))}
-    return {"text": "help your guild win", "current": 0, "target": 1, "percent": 0}
-
-
-def view_agent(aid: str, a: Dict[str, Any], viewer: Optional[str]) -> Dict[str, Any]:
-    row = {
-        "agent_id": aid,
-        "guild": a["guild"],
-        "role": a["role"],
-        "alive": bool(a["alive"]),
-        "hp": int(a["hp"]),
-        "energy": int(a["energy"]),
-        "credits": int(a["credits"]),
-        "suspicion": round(float(a["suspicion"]), 3),
-        "trust": round(float(a["trust"]), 3),
-        "revealed": bool(a["revealed"]),
-        "revealed_alignment": a["secret_alignment"] if a["revealed"] else None,
-        "last_action": a.get("last_action", "-"),
-    }
-    if viewer == aid:
-        row["is_you"] = True
-    return row
-
-
-def apply_action(state: Dict[str, Any], tick: int, aid: str, payload: Dict[str, Any], guards: Dict[str, int]):
-    ensure_agent(state, aid)
-    a = state["agents"][aid]
+def apply_action(
+    state: Dict[str, Any],
+    tick: int,
+    agent_id: str,
+    payload: Dict[str, Any],
+    guards: Dict[str, int],
+) -> List[Tuple[str, Dict[str, Any]]]:
+    ensure_agent(state, agent_id)
+    agent = state["agents"][agent_id]
     if state["match"]["status"] != "active":
         raise ValueError("match_not_active")
-    if not a["alive"]:
+    if not agent["alive"]:
         raise ValueError("agent_down")
-    t = str(payload.get("type", "")).strip()
-    if not t:
+
+    action_type = str(payload.get("type", "")).strip()
+    if not action_type:
         raise ValueError("missing_action_type")
-    g = a["guild"]
-    eg = "omega" if g == "alpha" else "alpha"
 
-    def spend(n: int):
-        if a["energy"] < n:
+    guild = agent["guild"]
+    enemy_guild = "omega" if guild == "alpha" else "alpha"
+
+    def spend(energy_cost: int):
+        if agent["energy"] < energy_cost:
             raise ValueError("no_energy")
-        a["energy"] -= n
+        agent["energy"] -= energy_cost
 
-    if t == "rest":
-        a["energy"] = int(clamp(a["energy"] + 3, 0, 8))
-        a["last_action"] = "rest"
-        return [("agent_rested", {"agent_id": aid})]
-    if t == "farm":
+    if action_type == "rest":
+        agent["energy"] = int(clamp(agent["energy"] + 3, 0, 8))
+        agent["last_action"] = "rest"
+        return [("agent_rested", {"agent_id": agent_id})]
+
+    if action_type == "farm":
         spend(1)
-        gain = h(f"{tick}:{aid}:farm", 2, 5) + (1 if a["role"] == "Broker" else 0)
-        a["credits"] += gain
-        a["last_action"] = f"farm+{gain}"
-        state["points"][aid] += 1
-        return [("credits_farmed", {"agent_id": aid, "gain": gain})]
-    if t == "guard":
+        gain = seeded_int(f"{tick}:{agent_id}:farm", 2, 5) + (1 if agent["role"] == "Broker" else 0)
+        agent["credits"] += gain
+        agent["last_action"] = f"farm+{gain}"
+        state["points"][agent_id] += 1
+        return [("credits_farmed", {"agent_id": agent_id, "gain": gain})]
+
+    if action_type == "guard":
         spend(1)
-        target = str(payload.get("target_agent") or aid)
-        if target not in state["agents"] or state["agents"][target]["guild"] != g:
+        target = str(payload.get("target_agent") or agent_id)
+        if target not in state["agents"] or state["agents"][target]["guild"] != guild:
             raise ValueError("guard_target_must_be_ally")
         guards[target] = int(guards.get(target, 0)) + 1
-        a["last_action"] = f"guard->{target}"
-        state["points"][aid] += 2
-        return [("agent_guarded", {"agent_id": aid, "target_agent": target})]
-    if t == "transfer":
+        agent["last_action"] = f"guard->{target}"
+        state["points"][agent_id] += 2
+        return [("agent_guarded", {"agent_id": agent_id, "target_agent": target})]
+
+    if action_type == "transfer":
         target = str(payload.get("target_agent") or "")
         amount = int(payload.get("amount", 0))
-        if target not in state["agents"] or state["agents"][target]["guild"] != g:
+        if target not in state["agents"] or state["agents"][target]["guild"] != guild:
             raise ValueError("transfer_target_must_be_ally")
-        if amount <= 0 or a["credits"] < amount:
+        if amount <= 0 or agent["credits"] < amount:
             raise ValueError("invalid_transfer_amount")
-        a["credits"] -= amount
+        agent["credits"] -= amount
         state["agents"][target]["credits"] += amount
-        a["last_action"] = f"transfer->{target}:{amount}"
-        return [("credits_transferred", {"agent_id": aid, "target_agent": target, "amount": amount})]
-    if t == "scan":
+        agent["last_action"] = f"transfer->{target}:{amount}"
+        return [("credits_transferred", {"agent_id": agent_id, "target_agent": target, "amount": amount})]
+
+    if action_type == "scan":
         spend(1)
         target = str(payload.get("target_agent") or "")
-        if target not in state["agents"] or state["agents"][target]["guild"] != g or target == aid:
+        if target not in state["agents"] or state["agents"][target]["guild"] != guild or target == agent_id:
             raise ValueError("scan_target_invalid")
-        acc = 0.68 if a["role"] == "Oracle" else 0.53
-        roll = h(f"{tick}:{aid}:{target}:scan", 0, 1000) / 1000.0
         truth = state["agents"][target]["secret_alignment"] == "traitor"
-        anomaly = (roll < acc and truth) or (roll >= acc and not truth)
+        accuracy = 0.68 if agent["role"] == "Oracle" else 0.53
+        roll = seeded_int(f"{tick}:{agent_id}:{target}:scan", 0, 1000) / 1000.0
+        anomaly = (roll < accuracy and truth) or (roll >= accuracy and not truth)
         signal = "anomaly_detected" if anomaly else "clean_reading"
-        a["last_action"] = f"scan->{target}:{signal}"
-        state["points"][aid] += 1
-        return [("scan_result", {"agent_id": aid, "target_agent": target, "signal": signal})]
-    if t == "accuse":
+        agent["last_action"] = f"scan->{target}:{signal}"
+        state["points"][agent_id] += 1
+        return [("scan_result", {"agent_id": agent_id, "target_agent": target, "signal": signal})]
+
+    if action_type == "accuse":
         spend(1)
         target = str(payload.get("target_agent") or "")
-        if target not in state["agents"] or state["agents"][target]["guild"] != g or target == aid:
+        if target not in state["agents"] or state["agents"][target]["guild"] != guild or target == agent_id:
             raise ValueError("accuse_target_invalid")
         hit = state["agents"][target]["secret_alignment"] == "traitor"
         if hit:
             state["agents"][target]["suspicion"] = float(clamp(state["agents"][target]["suspicion"] + 0.35, 0, 1.2))
-            state["points"][aid] += 3
-            a["last_action"] = f"accuse_hit->{target}"
-            return [("accusation_hit", {"agent_id": aid, "target_agent": target})]
-        a["suspicion"] = float(clamp(a["suspicion"] + 0.18, 0, 1.2))
-        state["points"][aid] -= 1
-        a["last_action"] = f"accuse_miss->{target}"
-        return [("accusation_miss", {"agent_id": aid, "target_agent": target})]
-    if t == "sabotage":
+            state["points"][agent_id] += 3
+            agent["last_action"] = f"accuse_hit->{target}"
+            return [("accusation_hit", {"agent_id": agent_id, "target_agent": target})]
+        agent["suspicion"] = float(clamp(agent["suspicion"] + 0.18, 0, 1.2))
+        state["points"][agent_id] -= 1
+        agent["last_action"] = f"accuse_miss->{target}"
+        return [("accusation_miss", {"agent_id": agent_id, "target_agent": target})]
+
+    if action_type == "sabotage":
         spend(2)
-        if a["cooldowns"]["sabotage"] > 0:
+        if int(agent["cooldowns"]["sabotage"]) > 0:
             raise ValueError("sabotage_cooldown")
-        dmg = h(f"{tick}:{aid}:sabotage", 3, 8)
-        state["guilds"][g]["hp"] = max(0, state["guilds"][g]["hp"] - dmg)
-        a["cooldowns"]["sabotage"] = 3
-        a["suspicion"] = float(clamp(a["suspicion"] + (0.26 if a["secret_alignment"] == "traitor" else 0.42), 0, 1.2))
-        a["stats"]["self_inflicted"] += dmg
-        a["last_action"] = f"sabotage-{dmg}"
-        state["points"][aid] += 2 if a["secret_alignment"] == "traitor" else -2
-        return [("guild_sabotaged", {"agent_id": aid, "guild": g, "damage": dmg})]
-    if t == "steal_vault":
+        dmg = seeded_int(f"{tick}:{agent_id}:sabotage", 3, 8)
+        state["guilds"][guild]["hp"] = max(0, int(state["guilds"][guild]["hp"]) - dmg)
+        agent["cooldowns"]["sabotage"] = 3
+        bump = 0.26 if agent["secret_alignment"] == "traitor" else 0.42
+        agent["suspicion"] = float(clamp(agent["suspicion"] + bump, 0, 1.2))
+        agent["stats"]["self_inflicted"] += dmg
+        agent["last_action"] = f"sabotage-{dmg}"
+        state["points"][agent_id] += 2 if agent["secret_alignment"] == "traitor" else -2
+        return [("guild_sabotaged", {"agent_id": agent_id, "guild": guild, "damage": dmg})]
+
+    if action_type == "steal_vault":
         spend(2)
-        if a["cooldowns"]["steal"] > 0:
+        if int(agent["cooldowns"]["steal"]) > 0:
             raise ValueError("steal_cooldown")
-        if state["guilds"][g]["vault"] <= 0:
+        if int(state["guilds"][guild]["vault"]) <= 0:
             raise ValueError("vault_empty")
-        amount = min(state["guilds"][g]["vault"], h(f"{tick}:{aid}:steal", 2, 6))
-        state["guilds"][g]["vault"] -= amount
-        a["credits"] += amount
-        a["cooldowns"]["steal"] = 4
-        a["suspicion"] = float(clamp(a["suspicion"] + (0.30 if a["secret_alignment"] == "traitor" else 0.46), 0, 1.2))
-        a["stats"]["vault_stolen"] += amount
-        a["last_action"] = f"steal+{amount}"
-        state["points"][aid] += 2 if a["secret_alignment"] == "traitor" else -2
-        return [("vault_stolen", {"agent_id": aid, "guild": g, "amount": amount})]
-    if t == "strike":
+        amount = min(int(state["guilds"][guild]["vault"]), seeded_int(f"{tick}:{agent_id}:steal", 2, 6))
+        state["guilds"][guild]["vault"] -= amount
+        agent["credits"] += amount
+        agent["cooldowns"]["steal"] = 4
+        bump = 0.30 if agent["secret_alignment"] == "traitor" else 0.46
+        agent["suspicion"] = float(clamp(agent["suspicion"] + bump, 0, 1.2))
+        agent["stats"]["vault_stolen"] += amount
+        agent["last_action"] = f"steal+{amount}"
+        state["points"][agent_id] += 2 if agent["secret_alignment"] == "traitor" else -2
+        return [("vault_stolen", {"agent_id": agent_id, "guild": guild, "amount": amount})]
+
+    if action_type == "strike":
         spend(2)
         target = str(payload.get("target_agent") or "")
-        if target not in state["agents"] or state["agents"][target]["guild"] != eg or not state["agents"][target]["alive"]:
+        if target not in state["agents"] or state["agents"][target]["guild"] != enemy_guild:
             raise ValueError("strike_target_invalid")
-        base = h(f"{tick}:{aid}:{target}:strike", 3, 7) + (1 if a["role"] == "Vanguard" else 0)
-        dmg = max(1, int(round(base * (0.63 ** int(guards.get(target, 0))))))
-        tga = state["agents"][target]
-        tga["hp"] = max(0, int(tga["hp"]) - dmg)
-        a["stats"]["damage_done"] += dmg
-        state["guilds"][eg]["hp"] = max(0, int(state["guilds"][eg]["hp"]) - max(1, dmg // 2))
+        if not state["agents"][target]["alive"]:
+            raise ValueError("strike_target_invalid")
+        base = seeded_int(f"{tick}:{agent_id}:{target}:strike", 3, 7) + (1 if agent["role"] == "Vanguard" else 0)
+        reduction = 0.63 ** int(guards.get(target, 0))
+        damage = max(1, int(round(base * reduction)))
+        target_agent = state["agents"][target]
+        target_agent["hp"] = max(0, int(target_agent["hp"]) - damage)
+        agent["stats"]["damage_done"] += damage
+        state["guilds"][enemy_guild]["hp"] = max(0, int(state["guilds"][enemy_guild]["hp"]) - max(1, damage // 2))
+
         downed = False
-        if tga["hp"] <= 0 and tga["alive"]:
-            tga["alive"] = False
+        if target_agent["hp"] <= 0 and target_agent["alive"]:
+            target_agent["alive"] = False
             downed = True
-            state["guilds"][eg]["hp"] = max(0, int(state["guilds"][eg]["hp"]) - 5)
-        state["points"][aid] += 4 if downed else 2
-        a["last_action"] = f"strike->{target}:{dmg}"
-        ev = [("strike_landed", {"agent_id": aid, "target_agent": target, "damage": dmg, "downed": downed})]
+            state["guilds"][enemy_guild]["hp"] = max(0, int(state["guilds"][enemy_guild]["hp"]) - 5)
+
+        state["points"][agent_id] += 4 if downed else 2
+        agent["last_action"] = f"strike->{target}:{damage}"
+        events = [("strike_landed", {"agent_id": agent_id, "target_agent": target, "damage": damage, "downed": downed})]
         if downed:
-            ev.insert(0, ("agent_downed", {"agent_id": target, "by": aid}))
-        return ev
+            events.insert(0, ("agent_downed", {"agent_id": target, "by": agent_id}))
+        return events
+
     raise ValueError("invalid_action_type")
+
+
+def end_match_if_needed(state: Dict[str, Any], tick: int, conn: sqlite3.Connection):
+    guilds = state["guilds"]
+    match = state["match"]
+    ended = (
+        int(guilds["alpha"]["hp"]) <= 0
+        or int(guilds["omega"]["hp"]) <= 0
+        or int(match["round"]) > int(match["max_rounds"])
+    )
+    if not ended:
+        return
+
+    alpha_alive = sum(1 for row in state["agents"].values() if row["guild"] == "alpha" and row["alive"])
+    omega_alive = sum(1 for row in state["agents"].values() if row["guild"] == "omega" and row["alive"])
+    alpha_score = int(guilds["alpha"]["hp"]) + int(guilds["alpha"]["vault"]) * 2 + (alpha_alive * 6)
+    omega_score = int(guilds["omega"]["hp"]) + int(guilds["omega"]["vault"]) * 2 + (omega_alive * 6)
+    winner: Optional[str] = None
+    if alpha_score != omega_score:
+        winner = "alpha" if alpha_score > omega_score else "omega"
+
+    match["status"] = "ended"
+    match["winner"] = winner
+    match["ended_at"] = tick
+    if winner in GUILDS:
+        state["guilds"][winner]["wins"] += 1
+
+    for aid, row in state["agents"].items():
+        row["revealed"] = True
+        state["points"][aid] += 8 if (winner and row["guild"] == winner) else -2
+
+    insert_event(conn, tick, "match_ended", {"match_id": int(match["id"]), "winner": winner})
+
+
+def restart_match(state: Dict[str, Any], tick: int, conn: sqlite3.Connection):
+    state["match"]["id"] = int(state["match"]["id"]) + 1
+    state["match"]["round"] = 1
+    state["match"]["status"] = "active"
+    state["match"]["winner"] = None
+    state["match"]["ended_at"] = None
+
+    for guild in GUILDS:
+        state["guilds"][guild]["hp"] = 100
+        state["guilds"][guild]["vault"] = 40
+        state["guilds"][guild]["score"] = 0
+
+    for row in state["agents"].values():
+        row["alive"] = True
+        row["hp"] = 16
+        row["energy"] = 8
+        row["suspicion"] = 0.08
+        row["trust"] = 0.52
+        row["cooldowns"] = {"sabotage": 0, "steal": 0}
+        row["stats"] = {"damage_done": 0, "vault_stolen": 0, "self_inflicted": 0}
+        row["last_action"] = "-"
+
+    assign_traitors(state)
+    insert_event(conn, tick, "match_started", {"match_id": int(state["match"]["id"])})
 
 
 def run_one_tick():
@@ -412,77 +555,64 @@ def run_one_tick():
         tick = int(state.get("tick", 0))
         cur = conn.cursor()
         cur.execute(
-            "SELECT action_id,agent_id,payload FROM actions WHERE status='queued' AND tick_submitted<=? ORDER BY created_at ASC, action_id ASC LIMIT 400",
+            f"SELECT action_id,agent_id,payload FROM {TABLE_ACTIONS} "
+            "WHERE status='queued' AND tick_submitted<=? "
+            "ORDER BY created_at ASC, action_id ASC LIMIT 400",
             (tick,),
         )
-        rows = cur.fetchall()
+        queued = cur.fetchall()
         guards: Dict[str, int] = {}
 
         if state["match"]["status"] == "active":
-            for row in rows:
-                aid = row["agent_id"]
+            for row in queued:
+                action_id = str(row["action_id"])
+                agent_id = str(row["agent_id"])
                 payload = json.loads(row["payload"])
                 try:
-                    for et, ep in apply_action(state, tick, aid, payload, guards):
-                        insert_event(conn, tick, et, ep)
-                    cur.execute("UPDATE actions SET status='applied', error=NULL WHERE action_id=?", (row["action_id"],))
-                except Exception as e:
-                    cur.execute("UPDATE actions SET status='rejected', error=? WHERE action_id=?", (str(e), row["action_id"]))
-                    insert_event(conn, tick, "action_rejected", {"agent_id": aid, "action": payload.get("type"), "error": str(e)})
+                    emitted = apply_action(state, tick, agent_id, payload, guards)
+                    for etype, epayload in emitted:
+                        insert_event(conn, tick, etype, epayload)
+                    cur.execute(
+                        f"UPDATE {TABLE_ACTIONS} SET status='applied', error=NULL WHERE action_id=?",
+                        (action_id,),
+                    )
+                except Exception as exc:
+                    cur.execute(
+                        f"UPDATE {TABLE_ACTIONS} SET status='rejected', error=? WHERE action_id=?",
+                        (str(exc), action_id),
+                    )
+                    insert_event(
+                        conn,
+                        tick,
+                        "action_rejected",
+                        {"agent_id": agent_id, "action": payload.get("type"), "error": str(exc)},
+                    )
 
-            for a in state["agents"].values():
-                a["energy"] = int(clamp(a["energy"] + (1 if a["alive"] else 0), 0, 8))
-                a["suspicion"] = float(clamp(a["suspicion"] - 0.06, 0, 1.2))
-                a["trust"] = float(clamp(a["trust"] + (0.01 if a["suspicion"] <= 0.2 else -0.01), 0, 1))
-                a["cooldowns"]["sabotage"] = max(0, int(a["cooldowns"]["sabotage"]) - 1)
-                a["cooldowns"]["steal"] = max(0, int(a["cooldowns"]["steal"]) - 1)
-                if a["suspicion"] >= 1.0 and not a["revealed"]:
-                    a["revealed"] = True
-                    insert_event(conn, tick, "betrayal_revealed", {"agent_id": a["agent_id"], "guild": a["guild"], "alignment": a["secret_alignment"]})
+            for row in state["agents"].values():
+                row["energy"] = int(clamp(row["energy"] + (1 if row["alive"] else 0), 0, 8))
+                row["suspicion"] = float(clamp(row["suspicion"] - 0.06, 0, 1.2))
+                trust_delta = 0.01 if row["suspicion"] <= 0.2 else -0.01
+                row["trust"] = float(clamp(row["trust"] + trust_delta, 0, 1))
+                row["cooldowns"]["sabotage"] = max(0, int(row["cooldowns"]["sabotage"]) - 1)
+                row["cooldowns"]["steal"] = max(0, int(row["cooldowns"]["steal"]) - 1)
+                if row["suspicion"] >= 1.0 and not row["revealed"]:
+                    row["revealed"] = True
+                    insert_event(
+                        conn,
+                        tick,
+                        "betrayal_revealed",
+                        {"agent_id": row["agent_id"], "guild": row["guild"], "alignment": row["secret_alignment"]},
+                    )
 
-            for g in GUILDS:
-                state["guilds"][g]["vault"] = int(state["guilds"][g]["vault"]) + 1
+            for guild in GUILDS:
+                state["guilds"][guild]["vault"] = int(state["guilds"][guild]["vault"]) + 1
 
             state["match"]["round"] = int(state["match"]["round"]) + 1
-            ended = state["guilds"]["alpha"]["hp"] <= 0 or state["guilds"]["omega"]["hp"] <= 0 or state["match"]["round"] > state["match"]["max_rounds"]
-            if ended:
-                a = state["guilds"]["alpha"]
-                o = state["guilds"]["omega"]
-                ascore = a["hp"] + a["vault"] * 2 + sum(1 for x in state["agents"].values() if x["guild"] == "alpha" and x["alive"]) * 6
-                oscore = o["hp"] + o["vault"] * 2 + sum(1 for x in state["agents"].values() if x["guild"] == "omega" and x["alive"]) * 6
-                winner = None if ascore == oscore else ("alpha" if ascore > oscore else "omega")
-                state["match"]["status"] = "ended"
-                state["match"]["winner"] = winner
-                state["match"]["ended_at"] = tick
-                if winner in GUILDS:
-                    state["guilds"][winner]["wins"] += 1
-                for aid, ag in state["agents"].items():
-                    ag["revealed"] = True
-                    state["points"][aid] += 8 if (winner and ag["guild"] == winner) else -2
-                insert_event(conn, tick, "match_ended", {"match_id": state["match"]["id"], "winner": winner})
+            end_match_if_needed(state, tick, conn)
         else:
             ended_at = state["match"].get("ended_at")
             if ended_at is not None and (tick - int(ended_at)) >= 2:
-                state["match"]["id"] += 1
-                state["match"]["round"] = 1
-                state["match"]["status"] = "active"
-                state["match"]["winner"] = None
-                state["match"]["ended_at"] = None
-                for g in GUILDS:
-                    state["guilds"][g]["hp"] = 100
-                    state["guilds"][g]["vault"] = 40
-                    state["guilds"][g]["score"] = 0
-                for ag in state["agents"].values():
-                    ag["alive"] = True
-                    ag["hp"] = 16
-                    ag["energy"] = 8
-                    ag["suspicion"] = 0.08
-                    ag["trust"] = 0.52
-                    ag["cooldowns"] = {"sabotage": 0, "steal": 0}
-                    ag["stats"] = {"damage_done": 0, "vault_stolen": 0, "self_inflicted": 0}
-                    ag["last_action"] = "-"
-                assign_traitors(state)
-                insert_event(conn, tick, "match_started", {"match_id": state["match"]["id"]})
+                restart_match(state, tick, conn)
 
         state["tick"] = tick + 1
         save_state(conn, state)
@@ -499,22 +629,23 @@ def advance_world_for_request():
         init_db()
         conn = db()
         try:
-            last = int(get_meta(conn, "last_tick_unix", str(int(time.time()))))
+            last_tick = int(get_meta(conn, "last_tick_unix", str(int(time.time()))))
             now = int(time.time())
-            elapsed = max(0, now - last)
+            elapsed = max(0, now - last_tick)
             due = min(MAX_TICKS_PER_REQUEST, int(elapsed // max(0.2, TICK_SECONDS)))
             cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) AS n FROM actions WHERE status='queued'")
-            queued = int(cur.fetchone()["n"])
+            cur.execute(f"SELECT COUNT(*) AS n FROM {TABLE_ACTIONS} WHERE status='queued'")
+            queued_count = int(cur.fetchone()["n"])
         finally:
             conn.close()
-        if queued > 0:
+
+        if queued_count > 0:
             due = max(due, 1)
         for _ in range(max(0, due)):
             run_one_tick()
 
 
-app = FastAPI(title="Betrayal Guilds Server")
+app = FastAPI(title="Betrayal Guilds Arena")
 app.mount("/web", StaticFiles(directory=WEB_DIR), name="web")
 init_db()
 
@@ -532,49 +663,78 @@ def home():
 
 
 @app.get("/v1/world")
-def world_info():
+def world():
     return {
         "title": "Betrayal Guilds Arena",
         "mode": "gaming-agents",
-        "rules_hash": "betrayal-guilds-v1",
+        "engine": "betrayal-guilds-v2",
         "tick_seconds": TICK_SECONDS,
-        "supported_actions": ["strike", "guard", "farm", "transfer", "scan", "accuse", "sabotage", "steal_vault", "rest"],
+        "supported_actions": list(SUPPORTED_ACTIONS),
     }
 
 
 @app.get("/v1/state")
 def state(since_event_id: Optional[int] = None, authorization: Optional[str] = Header(default=None)):
-    viewer = soft_agent(authorization)
+    viewer = soft_auth_agent(authorization)
     conn = db()
     try:
         s = load_state(conn)
-        agents = {aid: view_agent(aid, a, viewer) for aid, a in s["agents"].items()}
-        snapshot = {"tick": s["tick"], "match": s["match"], "guilds": s["guilds"], "agents": agents}
+        snapshot = {
+            "tick": int(s["tick"]),
+            "match": s["match"],
+            "guilds": s["guilds"],
+            "agents": {aid: project_agent(aid, row, viewer) for aid, row in s["agents"].items()},
+        }
+
         cur = conn.cursor()
         if since_event_id is None:
-            cur.execute("SELECT COALESCE(MAX(event_id),0) AS m FROM events")
-            return {"snapshot": snapshot, "events": [], "latest_event_id": int(cur.fetchone()["m"])}
+            cur.execute(f"SELECT COALESCE(MAX(event_id),0) AS m FROM {TABLE_EVENTS}")
+            latest = int(cur.fetchone()["m"])
+            return {"snapshot": snapshot, "events": [], "latest_event_id": latest}
+
         cur.execute(
-            "SELECT event_id,tick,type,payload FROM events WHERE event_id>? ORDER BY event_id ASC LIMIT 500",
+            f"SELECT event_id,tick,type,payload FROM {TABLE_EVENTS} "
+            "WHERE event_id>? ORDER BY event_id ASC LIMIT 500",
             (int(since_event_id),),
         )
-        evs = [{"event_id": int(r["event_id"]), "tick": int(r["tick"]), "type": r["type"], "payload": json.loads(r["payload"])} for r in cur.fetchall()]
-        latest = evs[-1]["event_id"] if evs else int(since_event_id)
-        return {"snapshot": snapshot, "events": evs, "latest_event_id": latest}
+        rows = cur.fetchall()
+        events = [
+            {
+                "event_id": int(row["event_id"]),
+                "tick": int(row["tick"]),
+                "type": str(row["type"]),
+                "payload": json.loads(row["payload"]),
+            }
+            for row in rows
+        ]
+        latest = events[-1]["event_id"] if events else int(since_event_id)
+        return {"snapshot": snapshot, "events": events, "latest_event_id": latest}
     finally:
         conn.close()
 
 
 @app.get("/v1/summary")
 def summary(authorization: Optional[str] = Header(default=None)):
-    viewer = soft_agent(authorization)
+    viewer = soft_auth_agent(authorization)
     conn = db()
     try:
         s = load_state(conn)
-        agents = {aid: view_agent(aid, a, viewer) for aid, a in s["agents"].items()}
-        suspects = sorted(agents.values(), key=lambda x: x["suspicion"], reverse=True)[:6]
-        leaders = sorted([{"agent_id": aid, "points": int(p)} for aid, p in s["points"].items()], key=lambda x: x["points"], reverse=True)[:10]
-        out = {"tick": s["tick"], "match": s["match"], "guilds": s["guilds"], "agents": agents, "top_suspects": suspects, "leaderboard": leaders}
+        agents = {aid: project_agent(aid, row, viewer) for aid, row in s["agents"].items()}
+        suspects = sorted(agents.values(), key=lambda row: row["suspicion"], reverse=True)[:6]
+        leaders = sorted(
+            [{"agent_id": aid, "points": int(points)} for aid, points in s["points"].items()],
+            key=lambda row: row["points"],
+            reverse=True,
+        )[:10]
+
+        out = {
+            "tick": int(s["tick"]),
+            "match": s["match"],
+            "guilds": s["guilds"],
+            "agents": agents,
+            "top_suspects": suspects,
+            "leaderboard": leaders,
+        }
         if viewer and viewer in s["agents"]:
             me = s["agents"][viewer]
             out["self"] = {
@@ -588,7 +748,7 @@ def summary(authorization: Optional[str] = Header(default=None)):
                 "suspicion": round(float(me["suspicion"]), 3),
                 "trust": round(float(me["trust"]), 3),
                 "secret_alignment": me["secret_alignment"],
-                "contract": progress_for(me),
+                "contract": private_contract(me),
             }
         return out
     finally:
@@ -596,22 +756,23 @@ def summary(authorization: Optional[str] = Header(default=None)):
 
 
 @app.post("/v1/actions")
-def actions(req: SubmitActionsRequest, authorization: Optional[str] = Header(default=None)):
-    authed = require_auth(authorization)
+def submit_actions(req: SubmitActionsRequest, authorization: Optional[str] = Header(default=None)):
+    authed = auth_agent(authorization)
     if not DEV_MODE and req.agent_id != authed:
         raise HTTPException(status_code=403, detail="agent_id_mismatch")
     if len(req.actions) > MAX_ACTIONS_PER_SUBMIT:
         raise HTTPException(status_code=400, detail=f"too_many_actions_max_{MAX_ACTIONS_PER_SUBMIT}")
+
     conn = db()
     try:
-        state = load_state(conn)
-        ensure_agent(state, req.agent_id)
-        save_state(conn, state)
-        ids = []
+        s = load_state(conn)
+        ensure_agent(s, req.agent_id)
+        save_state(conn, s)
+        ids: List[str] = []
         for payload in req.actions:
-            aid = str(uuid.uuid4())
-            queue_action(conn, aid, req.agent_id, int(req.tick_submitted), payload)
-            ids.append(aid)
+            action_id = str(uuid.uuid4())
+            queue_action(conn, action_id, req.agent_id, int(req.tick_submitted), payload)
+            ids.append(action_id)
         conn.commit()
         return {"accepted": True, "action_ids": ids}
     finally:
@@ -620,13 +781,13 @@ def actions(req: SubmitActionsRequest, authorization: Optional[str] = Header(def
 
 @app.get("/v1/agents")
 def agents(limit: int = 100, authorization: Optional[str] = Header(default=None)):
-    viewer = soft_agent(authorization)
+    viewer = soft_auth_agent(authorization)
     conn = db()
     try:
         s = load_state(conn)
-        rows = [view_agent(aid, a, viewer) for aid, a in s["agents"].items()]
-        rows.sort(key=lambda x: (x["guild"], -x["suspicion"], x["agent_id"]))
-        return {"tick": s["tick"], "agents": rows[: max(1, min(300, int(limit)))]}
+        rows = [project_agent(aid, row, viewer) for aid, row in s["agents"].items()]
+        rows.sort(key=lambda row: (row["guild"], -row["suspicion"], row["agent_id"]))
+        return {"tick": int(s["tick"]), "agents": rows[: max(1, min(300, int(limit)))]}
     finally:
         conn.close()
 
@@ -636,30 +797,39 @@ def leaderboard(limit: int = 12):
     conn = db()
     try:
         s = load_state(conn)
-        rows = sorted([{"agent_id": aid, "points": int(p)} for aid, p in s["points"].items()], key=lambda x: x["points"], reverse=True)
-        return {"tick": s["tick"], "leaders": rows[: max(1, min(100, int(limit)))]}
+        leaders = sorted(
+            [{"agent_id": aid, "points": int(points)} for aid, points in s["points"].items()],
+            key=lambda row: row["points"],
+            reverse=True,
+        )
+        return {"tick": int(s["tick"]), "leaders": leaders[: max(1, min(100, int(limit)))]}
     finally:
         conn.close()
 
 
-@app.post("/v1/auth/local-login", response_model=VerifyEntryResponse)
+@app.post("/v1/auth/local-login", response_model=LocalLoginResponse)
 def local_login(req: LocalLoginRequest):
     if DEV_MODE:
-        return VerifyEntryResponse(access_token=DEV_TOKEN, expires_at_unix=int(time.time()) + 3600)
+        return LocalLoginResponse(access_token=DEV_TOKEN, expires_at_unix=int(time.time()) + 3600)
     if not LOCAL_AUTH_ENABLED:
         raise HTTPException(status_code=403, detail="local_auth_disabled")
+
     expected = (LOCAL_AUTH_SECRET or "").strip()
-    if expected and str(req.secret or "").strip() != expected:
+    incoming = str(req.secret or "").strip()
+    if expected and incoming != expected:
         raise HTTPException(status_code=403, detail="bad_local_secret")
+
     agent_id = (str(req.agent_id or "agent_local").strip().lower() or "agent_local")[:48]
     ttl = max(60, min(7 * 24 * 3600, int(req.ttl_seconds or SESSION_TTL_SECONDS)))
     now = int(time.time())
     token = "sess_" + uuid.uuid4().hex
+
     conn = db()
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO sessions(token,agent_id,payer,expires_at_unix,created_at) VALUES(?,?,?,?,?)",
+            f"INSERT INTO {TABLE_SESSIONS}(token,agent_id,payer,expires_at_unix,created_at) "
+            "VALUES(?,?,?,?,?)",
             (token, agent_id, "local", now + ttl, now),
         )
         s = load_state(conn)
@@ -668,19 +838,24 @@ def local_login(req: LocalLoginRequest):
         conn.commit()
     finally:
         conn.close()
-    return VerifyEntryResponse(access_token=token, expires_at_unix=now + ttl)
+
+    return LocalLoginResponse(access_token=token, expires_at_unix=now + ttl)
 
 
 @app.get("/v1/auth/whoami")
 def whoami(authorization: Optional[str] = Header(default=None)):
-    agent_id = require_auth(authorization)
+    agent_id = auth_agent(authorization)
     if DEV_MODE:
         return {"mode": "dev", "agent_id": agent_id, "token_prefix": DEV_TOKEN[:12] + "..."}
+
     token = authorization.split(" ", 1)[1].strip()
     conn = db()
     try:
         cur = conn.cursor()
-        cur.execute("SELECT agent_id,payer,expires_at_unix,created_at FROM sessions WHERE token=?", (token,))
+        cur.execute(
+            f"SELECT agent_id,payer,expires_at_unix,created_at FROM {TABLE_SESSIONS} WHERE token=?",
+            (token,),
+        )
         row = cur.fetchone()
         if row is None:
             raise HTTPException(status_code=403, detail="invalid_session_token")
@@ -696,22 +871,27 @@ def whoami(authorization: Optional[str] = Header(default=None)):
         conn.close()
 
 
-@app.post("/v1/auth/challenge", response_model=AuthChallengeResponse)
-def auth_challenge(_: AuthChallengeRequest):
-    raise HTTPException(status_code=410, detail="challenge_auth_disabled_in_betrayal_mode")
+@app.post("/v1/admin/reset-world")
+def admin_reset_world(x_admin_secret: Optional[str] = Header(default=None)):
+    expected = (ADMIN_RESET_SECRET or "").strip()
+    if expected and (x_admin_secret or "").strip() != expected:
+        raise HTTPException(status_code=403, detail="bad_admin_secret")
 
-
-@app.post("/v1/auth/verify-entry", response_model=VerifyEntryResponse)
-def verify_entry(_: VerifyEntryRequest):
-    raise HTTPException(status_code=410, detail="onchain_verify_disabled_in_betrayal_mode")
+    conn = db()
+    try:
+        reset_world(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "reset_at_unix": int(time.time())}
 
 
 async def tick_runner():
     while True:
         try:
             run_one_tick()
-        except Exception as e:
-            print("Tick error:", repr(e))
+        except Exception as exc:
+            print("tick_error", repr(exc))
         await asyncio.sleep(TICK_SECONDS)
 
 
@@ -729,4 +909,3 @@ async def shutdown():
     task = getattr(app.state, "runner_task", None)
     if task:
         task.cancel()
-
