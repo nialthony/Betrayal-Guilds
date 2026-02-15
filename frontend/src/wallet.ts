@@ -2,10 +2,11 @@ import { createConfig, http } from 'wagmi'
 import { injected, walletConnect } from 'wagmi/connectors'
 import { monadTestnet } from './chains'
 
-const fallbackProjectId = 'YOUR_WALLETCONNECT_PROJECT_ID'
-const walletConnectProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || fallbackProjectId
+const runtimeProjectId = window.__BG_CONFIG__?.walletConnectProjectId || ''
+const walletConnectProjectId =
+  import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || runtimeProjectId || ''
 
-export const walletConnectProjectIdMissing = walletConnectProjectId === fallbackProjectId
+export const walletConnectProjectIdMissing = !walletConnectProjectId
 
 const connectors = walletConnectProjectIdMissing
   ? [injected()]

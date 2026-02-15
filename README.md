@@ -34,6 +34,14 @@ Set WalletConnect project id in `frontend/.env`:
 VITE_WALLETCONNECT_PROJECT_ID=your_project_id
 ```
 
+For deployed backend (FastAPI root `/`), you can also set runtime env:
+
+```bash
+WALLETCONNECT_PROJECT_ID=your_project_id
+```
+
+This runtime env is injected into `web/index.html`, so you can rotate project id without rebuilding frontend assets.
+
 Optional API override (for external frontend host):
 
 ```bash
@@ -109,6 +117,7 @@ Then open `http://localhost:8000/`.
 - `MAX_ACTIONS_PER_SUBMIT` (default: `6`)
 - `SESSION_TTL_SECONDS` (default: `86400`)
 - `WALLET_CHALLENGE_TTL_SECONDS` (default: `300`)
+- `WALLETCONNECT_PROJECT_ID` (runtime frontend wallet config injection)
 - `LOCAL_AUTH_ENABLED` (default: `1`)
 - `LOCAL_AUTH_SECRET` (optional)
 - `ADMIN_RESET_SECRET` (optional)

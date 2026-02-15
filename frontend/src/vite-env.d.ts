@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+export {}
 
 interface ImportMetaEnv {
   readonly VITE_API_BASE?: string
@@ -7,4 +8,12 @@ interface ImportMetaEnv {
 
 interface ImportMeta {
   readonly env: ImportMetaEnv
+}
+
+declare global {
+  interface Window {
+    __BG_CONFIG__?: {
+      walletConnectProjectId?: string
+    }
+  }
 }

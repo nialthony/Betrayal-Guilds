@@ -1,4 +1,5 @@
 import asyncio
+import html
 import hashlib
 import json
 import os
@@ -13,7 +14,7 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 from eth_utils import to_checksum_address
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -724,7 +725,15 @@ async def tick_middleware(request, call_next):
 
 @app.get("/")
 def home():
-    return FileResponse(os.path.join(WEB_DIR, "index.html"))
+    path = os.path.join(WEB_DIR, "index.html")
+    with open(path, "r", encoding="utf-8") as f:
+        page = f.read()
+    wallet_project_id = (os.getenv("WALLETCONNECT_PROJECT_ID", "") or "").strip()
+    page = page.replace(
+        "__BG_WALLETCONNECT_PROJECT_ID__",
+        html.escape(wallet_project_id, quote=True),
+    )
+    return HTMLResponse(page)
 
 
 @app.get("/v1/world")
