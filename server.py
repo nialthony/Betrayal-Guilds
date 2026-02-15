@@ -9,6 +9,9 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+from eth_account import Account
+from eth_account.messages import encode_defunct
+from eth_utils import to_checksum_address
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +31,7 @@ TICK_SECONDS = float(os.getenv("TICK_SECONDS", "2.0"))
 MAX_TICKS_PER_REQUEST = int(os.getenv("MAX_TICKS_PER_REQUEST", "4"))
 MAX_ACTIONS_PER_SUBMIT = int(os.getenv("MAX_ACTIONS_PER_SUBMIT", "6"))
 SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", "86400"))
+WALLET_CHALLENGE_TTL_SECONDS = int(os.getenv("WALLET_CHALLENGE_TTL_SECONDS", "300"))
 
 LOCAL_AUTH_ENABLED = os.getenv("LOCAL_AUTH_ENABLED", "1") == "1"
 LOCAL_AUTH_SECRET = os.getenv("LOCAL_AUTH_SECRET", "")
@@ -61,6 +65,7 @@ TABLE_META = "bg_meta"
 TABLE_EVENTS = "bg_events"
 TABLE_ACTIONS = "bg_actions"
 TABLE_SESSIONS = "bg_sessions"
+TABLE_WALLET_CHALLENGES = "bg_wallet_challenges"
 
 TICK_LOCK = threading.Lock()
 
@@ -74,6 +79,31 @@ class LocalLoginRequest(BaseModel):
 class LocalLoginResponse(BaseModel):
     access_token: str
     expires_at_unix: int
+
+
+class WalletChallengeRequest(BaseModel):
+    wallet_address: str
+
+
+class WalletChallengeResponse(BaseModel):
+    challenge_id: str
+    message: str
+    expires_at_unix: int
+
+
+class WalletVerifyRequest(BaseModel):
+    wallet_address: str
+    challenge_id: str
+    signature: str
+    agent_id: Optional[str] = None
+    ttl_seconds: Optional[int] = None
+
+
+class WalletVerifyResponse(BaseModel):
+    access_token: str
+    expires_at_unix: int
+    agent_id: str
+    wallet_address: str
 
 
 class SubmitActionsRequest(BaseModel):
@@ -235,6 +265,15 @@ def init_db():
             "expires_at_unix INTEGER NOT NULL,"
             "created_at INTEGER NOT NULL)"
         )
+        cur.execute(
+            f"CREATE TABLE IF NOT EXISTS {TABLE_WALLET_CHALLENGES} ("
+            "challenge_id TEXT PRIMARY KEY,"
+            "wallet_address TEXT NOT NULL,"
+            "message TEXT NOT NULL,"
+            "expires_at_unix INTEGER NOT NULL,"
+            "used INTEGER NOT NULL DEFAULT 0,"
+            "created_at INTEGER NOT NULL)"
+        )
         if get_meta(conn, "state", "") == "":
             set_meta(conn, "state", json.dumps(default_state()))
         if get_meta(conn, "last_tick_unix", "") == "":
@@ -265,6 +304,7 @@ def reset_world(conn: sqlite3.Connection):
     cur = conn.cursor()
     cur.execute(f"DELETE FROM {TABLE_EVENTS}")
     cur.execute(f"DELETE FROM {TABLE_ACTIONS}")
+    cur.execute(f"DELETE FROM {TABLE_WALLET_CHALLENGES}")
     set_meta(conn, "state", json.dumps(default_state()))
     set_meta(conn, "last_tick_unix", str(int(time.time())))
 
@@ -299,6 +339,31 @@ def private_contract(agent: Dict[str, Any]) -> Dict[str, Any]:
             "percent": int(clamp((current / 25) * 100, 0, 100)),
         }
     return {"text": "help your guild win", "current": 0, "target": 1, "percent": 0}
+
+
+def normalize_wallet_address(raw: str) -> str:
+    value = (raw or "").strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="missing_wallet_address")
+    try:
+        return to_checksum_address(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid_wallet_address")
+
+
+def issue_session(conn: sqlite3.Connection, agent_id: str, payer: str, ttl_seconds: int) -> Tuple[str, int]:
+    now = int(time.time())
+    ttl = max(60, min(7 * 24 * 3600, int(ttl_seconds)))
+    token = "sess_" + uuid.uuid4().hex
+    cur = conn.cursor()
+    cur.execute(
+        f"INSERT INTO {TABLE_SESSIONS}(token,agent_id,payer,expires_at_unix,created_at) VALUES(?,?,?,?,?)",
+        (token, agent_id, payer, now + ttl, now),
+    )
+    s = load_state(conn)
+    ensure_agent(s, agent_id)
+    save_state(conn, s)
+    return token, now + ttl
 
 
 def auth_agent(authorization: Optional[str]) -> str:
@@ -820,26 +885,109 @@ def local_login(req: LocalLoginRequest):
         raise HTTPException(status_code=403, detail="bad_local_secret")
 
     agent_id = (str(req.agent_id or "agent_local").strip().lower() or "agent_local")[:48]
-    ttl = max(60, min(7 * 24 * 3600, int(req.ttl_seconds or SESSION_TTL_SECONDS)))
+
+    conn = db()
+    try:
+        token, expires = issue_session(conn, agent_id=agent_id, payer="local", ttl_seconds=int(req.ttl_seconds or SESSION_TTL_SECONDS))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return LocalLoginResponse(access_token=token, expires_at_unix=expires)
+
+
+@app.post("/v1/auth/wallet/challenge", response_model=WalletChallengeResponse)
+def wallet_challenge(req: WalletChallengeRequest):
+    wallet_address = normalize_wallet_address(req.wallet_address)
     now = int(time.time())
-    token = "sess_" + uuid.uuid4().hex
+    challenge_id = uuid.uuid4().hex
+    expires = now + max(60, WALLET_CHALLENGE_TTL_SECONDS)
+    nonce = uuid.uuid4().hex[:16]
+    message = (
+        "Betrayal Guilds Wallet Login\n"
+        f"wallet: {wallet_address}\n"
+        f"challenge_id: {challenge_id}\n"
+        f"nonce: {nonce}\n"
+        f"issued_at_unix: {now}\n"
+        f"expires_at_unix: {expires}"
+    )
 
     conn = db()
     try:
         cur = conn.cursor()
         cur.execute(
-            f"INSERT INTO {TABLE_SESSIONS}(token,agent_id,payer,expires_at_unix,created_at) "
-            "VALUES(?,?,?,?,?)",
-            (token, agent_id, "local", now + ttl, now),
+            f"INSERT INTO {TABLE_WALLET_CHALLENGES}(challenge_id,wallet_address,message,expires_at_unix,used,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (challenge_id, wallet_address, message, expires, 0, now),
         )
-        s = load_state(conn)
-        ensure_agent(s, agent_id)
-        save_state(conn, s)
+        cur.execute(
+            f"DELETE FROM {TABLE_WALLET_CHALLENGES} WHERE expires_at_unix<? OR used=1",
+            (now - 600,),
+        )
         conn.commit()
     finally:
         conn.close()
 
-    return LocalLoginResponse(access_token=token, expires_at_unix=now + ttl)
+    return WalletChallengeResponse(
+        challenge_id=challenge_id,
+        message=message,
+        expires_at_unix=expires,
+    )
+
+
+@app.post("/v1/auth/wallet/verify", response_model=WalletVerifyResponse)
+def wallet_verify(req: WalletVerifyRequest):
+    wallet_address = normalize_wallet_address(req.wallet_address)
+    challenge_id = (req.challenge_id or "").strip()
+    signature = (req.signature or "").strip()
+    if not challenge_id:
+        raise HTTPException(status_code=400, detail="missing_challenge_id")
+    if not signature:
+        raise HTTPException(status_code=400, detail="missing_signature")
+
+    conn = db()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT wallet_address,message,expires_at_unix,used FROM {TABLE_WALLET_CHALLENGES} WHERE challenge_id=?",
+            (challenge_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="challenge_not_found")
+        if int(row["used"]) == 1:
+            raise HTTPException(status_code=400, detail="challenge_already_used")
+        if int(row["expires_at_unix"]) < int(time.time()):
+            raise HTTPException(status_code=400, detail="challenge_expired")
+        if normalize_wallet_address(str(row["wallet_address"])) != wallet_address:
+            raise HTTPException(status_code=400, detail="wallet_challenge_mismatch")
+
+        recovered = Account.recover_message(encode_defunct(text=str(row["message"])), signature=signature)
+        recovered_norm = normalize_wallet_address(recovered)
+        if recovered_norm != wallet_address:
+            raise HTTPException(status_code=403, detail="bad_signature")
+
+        agent_id = (str(req.agent_id or wallet_address).strip().lower() or wallet_address.lower())[:48]
+        token, expires = issue_session(
+            conn,
+            agent_id=agent_id,
+            payer=wallet_address.lower(),
+            ttl_seconds=int(req.ttl_seconds or SESSION_TTL_SECONDS),
+        )
+        cur.execute(
+            f"UPDATE {TABLE_WALLET_CHALLENGES} SET used=1 WHERE challenge_id=?",
+            (challenge_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return WalletVerifyResponse(
+        access_token=token,
+        expires_at_unix=expires,
+        agent_id=agent_id,
+        wallet_address=wallet_address.lower(),
+    )
 
 
 @app.get("/v1/auth/whoami")

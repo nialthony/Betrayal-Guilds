@@ -23,6 +23,11 @@ Frontend includes Monad Testnet chain:
 - RPC: `https://testnet-rpc.monad.xyz`
 - Explorer: `https://testnet.monadvision.com`
 
+Wallet login flow:
+1. `POST /v1/auth/wallet/challenge`
+2. Sign challenge message from connected wallet
+3. `POST /v1/auth/wallet/verify` to receive bearer token session
+
 Set WalletConnect project id in `frontend/.env`:
 
 ```bash
@@ -47,6 +52,8 @@ Main:
 
 Auth:
 - `POST /v1/auth/local-login`
+- `POST /v1/auth/wallet/challenge`
+- `POST /v1/auth/wallet/verify`
 - `GET /v1/auth/whoami`
 
 Admin:
@@ -101,6 +108,7 @@ Then open `http://localhost:8000/`.
 - `MAX_TICKS_PER_REQUEST` (default: `4`)
 - `MAX_ACTIONS_PER_SUBMIT` (default: `6`)
 - `SESSION_TTL_SECONDS` (default: `86400`)
+- `WALLET_CHALLENGE_TTL_SECONDS` (default: `300`)
 - `LOCAL_AUTH_ENABLED` (default: `1`)
 - `LOCAL_AUTH_SECRET` (optional)
 - `ADMIN_RESET_SECRET` (optional)
@@ -117,5 +125,7 @@ Recommended env on Vercel:
 - `SERVERLESS_MODE=1`
 - `LOCAL_AUTH_ENABLED=1`
 - `TICK_SECONDS=2.0`
+- `WALLET_CHALLENGE_TTL_SECONDS=300`
+- `VITE_WALLETCONNECT_PROJECT_ID` (set in frontend env at build time)
 
 SQLite on serverless filesystem is ephemeral. Use external storage for persistent production world state.

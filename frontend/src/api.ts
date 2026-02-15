@@ -27,6 +27,38 @@ export async function localLogin(agentId: string) {
   return (await parseResponse(res)) as { access_token: string; expires_at_unix: number }
 }
 
+export async function walletChallenge(walletAddress: string) {
+  const res = await fetch(`${API_BASE}/v1/auth/wallet/challenge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ wallet_address: walletAddress }),
+  })
+  return (await parseResponse(res)) as {
+    challenge_id: string
+    message: string
+    expires_at_unix: number
+  }
+}
+
+export async function walletVerify(payload: {
+  wallet_address: string
+  challenge_id: string
+  signature: string
+  agent_id?: string
+}) {
+  const res = await fetch(`${API_BASE}/v1/auth/wallet/verify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return (await parseResponse(res)) as {
+    access_token: string
+    expires_at_unix: number
+    agent_id: string
+    wallet_address: string
+  }
+}
+
 export async function whoAmI(token: string) {
   const res = await fetch(`${API_BASE}/v1/auth/whoami`, { headers: authHeaders(token) })
   return parseResponse(res)

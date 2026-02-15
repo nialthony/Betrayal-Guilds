@@ -7,15 +7,19 @@ const walletConnectProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || 
 
 export const walletConnectProjectIdMissing = walletConnectProjectId === fallbackProjectId
 
+const connectors = walletConnectProjectIdMissing
+  ? [injected()]
+  : [
+      injected(),
+      walletConnect({
+        projectId: walletConnectProjectId,
+        showQrModal: true,
+      }),
+    ]
+
 export const wagmiConfig = createConfig({
   chains: [monadTestnet],
-  connectors: [
-    injected(),
-    walletConnect({
-      projectId: walletConnectProjectId,
-      showQrModal: true,
-    }),
-  ],
+  connectors,
   transports: {
     [monadTestnet.id]: http(monadTestnet.rpcUrls.default.http[0]),
   },

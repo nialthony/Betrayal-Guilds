@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useAccount, useChainId, useConnect, useDisconnect, useSwitchChain } from 'wagmi'
-import { getEvents, getSummary, localLogin, resetWorld, submitActions, whoAmI } from './api'
+import { useAccount, useChainId, useConnect, useDisconnect, useSignMessage, useSwitchChain } from 'wagmi'
+import { getEvents, getSummary, localLogin, resetWorld, submitActions, walletChallenge, walletVerify, whoAmI } from './api'
 import { monadTestnet } from './chains'
 import type { ActionPayload, AgentRow, SummaryResponse } from './types'
 import { walletConnectProjectIdMissing } from './wallet'
@@ -42,6 +42,7 @@ export default function App() {
   const chainId = useChainId()
   const { disconnect } = useDisconnect()
   const { switchChain } = useSwitchChain()
+  const { signMessageAsync } = useSignMessage()
 
   const [token, setToken] = useState('')
   const [agentId, setAgentId] = useState('agent_alpha_blade')
@@ -102,10 +103,30 @@ export default function App() {
     [pushFeed, saveToken],
   )
 
+  const walletLogin = useCallback(async () => {
+    if (!address) {
+      throw new Error('wallet_not_connected')
+    }
+    const normalized = address.toLowerCase()
+    const challenge = await walletChallenge(normalized)
+    const signature = await signMessageAsync({ message: challenge.message })
+    const verified = await walletVerify({
+      wallet_address: normalized,
+      challenge_id: challenge.challenge_id,
+      signature,
+      agent_id: normalized,
+    })
+    setAgentId(verified.agent_id)
+    saveToken(verified.access_token)
+    pushFeed(`[${nowStamp()}] WALLET AUTH OK :: ${verified.wallet_address}`)
+    return verified.access_token
+  }, [address, pushFeed, saveToken, signMessageAsync])
+
   const ensureToken = useCallback(async () => {
     if (token) return token
+    if (address) return walletLogin()
     return login(agentId)
-  }, [agentId, login, token])
+  }, [address, agentId, login, token, walletLogin])
 
   const refresh = useCallback(async () => {
     try {
@@ -249,7 +270,7 @@ export default function App() {
             Connect wallet to Monad Testnet, map address to agent identity, login session, then drive betrayal actions directly to the arena API.
           </p>
           {walletConnectProjectIdMissing && (
-            <div className="warning">Set <code>VITE_WALLETCONNECT_PROJECT_ID</code> for full WalletConnect support.</div>
+            <div className="warning">Set <code>VITE_WALLETCONNECT_PROJECT_ID</code> to enable WalletConnect QR. Injected wallet still works.</div>
           )}
           {isConnected && !onMonad && (
             <div className="warning">
@@ -293,14 +314,17 @@ export default function App() {
                     return
                   }
                   try {
-                    setAgentId(walletAgentId)
-                    await login(walletAgentId)
+                    if (!onMonad) {
+                      pushFeed(`[${nowStamp()}] AUTH FAIL :: switch to Monad testnet first`)
+                      return
+                    }
+                    await walletLogin()
                   } catch (error) {
                     pushFeed(`[${nowStamp()}] AUTH FAIL :: ${parseDetail(error)}`)
                   }
                 }}
               >
-                Sync Wallet Session
+                Wallet Login (Sign)
               </button>
               <button
                 className="btn"
