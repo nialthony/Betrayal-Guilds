@@ -1,0 +1,12 @@
+.venv
+cache
+out
+__pycache__
+world.db
+bots
+*.pyc
+*.pyo
+*.pyd
+*.sqlite
+*.sqlite3
+

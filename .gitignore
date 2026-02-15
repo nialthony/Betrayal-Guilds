@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+cache/
+out/
+world.db
+*.pyc
+*.pyo
+*.pyd
+*.sqlite
+*.sqlite3
+\!new
